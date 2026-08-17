@@ -1,0 +1,70 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: netra
+      POSTGRES_PASSWORD: netra
+      POSTGRES_DB: netra
+    expose:
+      - "5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U netra"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    expose:
+      - "6379"
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://netra:netra@db:5432/netra
+      REDIS_URL: redis://redis:6379/0
+      LIVE_BASE: https://live.sentinelgujarat.in
+    volumes:
+      - snapshots:/snapshots
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  gateway:
+    build: ./gateway
+    environment:
+      LIVE_BASE: https://live.sentinelgujarat.in
+    ports:
+      - "8081:8081"
+
+  analytics:
+    build: ./analytics
+    environment:
+      BACKEND_URL: http://backend:8000
+      MAX_STREAMS: "6"
+      SAMPLE_EVERY: "2.0"
+      OCR_TOPK: "4"
+    depends_on:
+      - backend
+
+  frontend:
+    build: ./frontend
+    environment:
+      VITE_API_BASE: http://localhost:8000
+      VITE_GATEWAY_BASE: http://localhost:8081
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+      - gateway
+
+volumes:
+  pgdata:
+  snapshots:
