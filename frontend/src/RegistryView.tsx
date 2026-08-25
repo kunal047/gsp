@@ -5,8 +5,10 @@ import {
   exportCameraRegistry,
   fetchCameras,
   getPrincipal,
+  updateCameraLifecycle,
   type Camera,
   type CameraCreate,
+  type CameraLifecycleUpdate,
 } from "./api";
 
 const EMPTY: CameraCreate = {
@@ -86,6 +88,8 @@ export default function RegistryView({ onChanged }: { onChanged?: () => void }) 
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [editing, setEditing] = useState<Camera | null>(null);
+  const [lifecycle, setLifecycle] = useState<CameraLifecycleUpdate | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const canAct = getPrincipal().role !== "viewer";
 
@@ -164,6 +168,43 @@ export default function RegistryView({ onChanged }: { onChanged?: () => void }) 
     } catch { setMessage("Registry export failed."); }
   };
 
+  const editLifecycle = (camera: Camera) => {
+    setEditing(camera);
+    setLifecycle({
+      installed_at: camera.installed_at,
+      maintenance_status: camera.maintenance_status || "unknown",
+      last_service_at: camera.last_service_at,
+      next_service_at: camera.next_service_at,
+      eol_at: camera.eol_at,
+      maintenance_notes: camera.maintenance_notes,
+    });
+  };
+
+  const dateInput = (value: string | null) => value ? value.slice(0, 16) : "";
+  const saveLifecycle = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!editing || !lifecycle) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const iso = (value: string | null) => value ? new Date(value).toISOString() : null;
+      await updateCameraLifecycle(editing.camera_id, {
+        ...lifecycle,
+        installed_at: iso(lifecycle.installed_at),
+        last_service_at: iso(lifecycle.last_service_at),
+        next_service_at: iso(lifecycle.next_service_at),
+        eol_at: iso(lifecycle.eol_at),
+      });
+      setMessage(`${editing.camera_id} lifecycle updated and audited.`);
+      setEditing(null);
+      setLifecycle(null);
+      await load();
+      onChanged?.();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Lifecycle update failed.");
+    } finally { setBusy(false); }
+  };
+
   return (
     <section className="registry" aria-label="Camera registry">
       <div className="registry-head">
@@ -208,12 +249,29 @@ export default function RegistryView({ onChanged }: { onChanged?: () => void }) 
         </form>
       )}
 
+      {editing && lifecycle && (
+        <form className="registry-form lifecycle-form" onSubmit={saveLifecycle}>
+          <div className="form-title">
+            <strong>Asset lifecycle · {editing.name}</strong>
+            <span>{editing.camera_id} · dates must be verified from department records</span>
+          </div>
+          <label><span>maintenance status</span><select value={lifecycle.maintenance_status} onChange={(e) => setLifecycle({ ...lifecycle, maintenance_status: e.target.value })}>
+            <option>unknown</option><option>healthy</option><option>due</option><option>overdue</option><option>under_maintenance</option><option>retired</option>
+          </select></label>
+          {(["installed_at", "last_service_at", "next_service_at", "eol_at"] as const).map((field) => (
+            <label key={field}><span>{field.replaceAll("_", " ")}</span><input type="datetime-local" value={dateInput(lifecycle[field])} onChange={(e) => setLifecycle({ ...lifecycle, [field]: e.target.value || null })} /></label>
+          ))}
+          <label className="lifecycle-notes"><span>maintenance notes</span><textarea value={lifecycle.maintenance_notes || ""} onChange={(e) => setLifecycle({ ...lifecycle, maintenance_notes: e.target.value || null })} maxLength={2000} /></label>
+          <div className="form-actions"><button type="button" onClick={() => { setEditing(null); setLifecycle(null); }}>Cancel</button><button className="primary" disabled={busy}>{busy ? "Saving…" : "Save lifecycle"}</button></div>
+        </form>
+      )}
+
       {message && <div className="registry-message" role="status">{message}</div>}
       {!canAct && <div className="registry-message">Viewer role is read-only. Export remains available.</div>}
 
       <div className="registry-table-wrap">
         <table className="registry-table">
-          <thead><tr><th>Camera</th><th>Location</th><th>Department</th><th>Integration</th><th>Health</th><th>Provenance</th></tr></thead>
+          <thead><tr><th>Camera</th><th>Location</th><th>Department</th><th>Integration</th><th>Health</th><th>Lifecycle</th><th>Provenance</th></tr></thead>
           <tbody>{filtered.map((camera) => (
             <tr key={camera.camera_id}>
               <td><strong>{camera.name || "Unnamed camera"}</strong><code>{camera.camera_id}</code></td>
@@ -221,6 +279,7 @@ export default function RegistryView({ onChanged }: { onChanged?: () => void }) 
               <td>{camera.department || "—"}</td>
               <td>{camera.protocol || "—"} · {camera.container || camera.codec || "unknown"}<small>{camera.analytics_enabled ? "Analytics enabled" : "View only"}</small></td>
               <td><span className={`health-chip ${camera.health_status}`}>{camera.health_status || "unknown"}</span></td>
+              <td><span className={`maintenance-chip ${camera.maintenance_status}`}>{camera.maintenance_status || "unknown"}</span>{camera.next_service_at && <small>Next {new Date(camera.next_service_at).toLocaleDateString()}</small>}{canAct && <button className="table-action" onClick={() => editLifecycle(camera)}>Manage</button>}</td>
               <td>{camera.source || "Unspecified"}</td>
             </tr>
           ))}</tbody>

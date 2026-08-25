@@ -35,6 +35,13 @@ async function apiPost(path: string, body?: any) {
     body: body ? JSON.stringify(body) : undefined,
   });
 }
+async function apiPatch(path: string, body: any) {
+  return fetch(`${API_BASE}${path}`, {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+}
 async function apiDelete(path: string) {
   return fetch(`${API_BASE}${path}`, {
     method: "DELETE",
@@ -136,6 +143,31 @@ export interface BulkResult {
   inserted: number;
   skipped: number;
   total: number;
+}
+
+export type CameraLifecycleUpdate = Pick<
+  Camera,
+  | "installed_at"
+  | "maintenance_status"
+  | "last_service_at"
+  | "next_service_at"
+  | "eol_at"
+  | "maintenance_notes"
+>;
+
+export async function updateCameraLifecycle(
+  cameraId: string,
+  lifecycle: CameraLifecycleUpdate
+): Promise<Camera> {
+  const res = await apiPatch(
+    `/api/cameras/${encodeURIComponent(cameraId)}/lifecycle`,
+    lifecycle
+  );
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `Lifecycle update failed (${res.status})`);
+  }
+  return res.json();
 }
 
 export async function createCamera(camera: CameraCreate): Promise<Camera> {
