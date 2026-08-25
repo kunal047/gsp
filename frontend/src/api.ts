@@ -153,7 +153,7 @@ export type CameraLifecycleUpdate = Pick<
   | "next_service_at"
   | "eol_at"
   | "maintenance_notes"
->;
+> & { make: string | null; model: string | null };
 
 export async function updateCameraLifecycle(
   cameraId: string,
@@ -271,6 +271,21 @@ export interface FederationReport {
 }
 export async function fetchFederationReport(): Promise<FederationReport> {
   return apiGet(`/api/reports/federation`);
+}
+
+export interface ReadinessReport {
+  generated_at: string;
+  models: {
+    model: number;
+    title: string;
+    status: "pass" | "partial" | "blocked";
+    summary: string;
+    checks: { label: string; value: string | number; ok: boolean }[];
+    blocker: string | null;
+  }[];
+}
+export async function fetchReadinessReport(): Promise<ReadinessReport> {
+  return apiGet(`/api/reports/readiness`);
 }
 
 export interface AuditEntry {

@@ -1273,6 +1273,31 @@ body,
 }
 
 /* ---- Operational activity / diagnostics panel ---- */
+.readiness { grid-column: 1 / -1; padding: 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.readiness-head { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 12px; }
+.readiness-head h2 { margin: 3px 0 0; font-size: 18px; }
+.readiness-head small { color: var(--text-dim); font-size: 9px; }
+.readiness-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.readiness-card { padding: 12px; border: 1px solid var(--border); border-top: 2px solid #64748b; border-radius: 8px; background: var(--panel-2); }
+.readiness-card.pass { border-top-color: #22c55e; }
+.readiness-card.partial { border-top-color: #f59e0b; }
+.readiness-card.blocked { border-top-color: #ef4444; }
+.readiness-title { display: flex; align-items: center; justify-content: space-between; color: var(--text-dim); font-size: 8px; font-weight: 700; letter-spacing: .7px; }
+.readiness-title b { padding: 2px 6px; border-radius: 999px; background: rgba(100,116,139,.12); text-transform: uppercase; }
+.readiness-card.pass .readiness-title b { color: #22c55e; }
+.readiness-card.partial .readiness-title b { color: #f59e0b; }
+.readiness-card.blocked .readiness-title b { color: #ef4444; }
+.readiness-card h3 { margin: 8px 0 4px; font-size: 12px; }
+.readiness-card > p { min-height: 30px; margin: 0 0 9px; color: var(--text-dim); font-size: 9px; line-height: 1.5; }
+.readiness-checks { display: grid; gap: 4px; }
+.readiness-checks > div { display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 5px; font-size: 9px; }
+.readiness-checks i { width: 14px; height: 14px; display: grid; place-items: center; border-radius: 50%; font-size: 8px; font-style: normal; }
+.readiness-checks i.ok { color: #22c55e; background: rgba(34,197,94,.12); }
+.readiness-checks i.gap { color: #f59e0b; background: rgba(245,158,11,.12); }
+.readiness-checks strong { font-variant-numeric: tabular-nums; }
+.readiness-blocker { margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--border); color: #fbbf24; font-size: 8.5px; line-height: 1.45; }
+@media (max-width: 1000px) { .readiness-grid { grid-template-columns: 1fr; } }
+
 .detpanel {
   background: var(--panel);
   border-left: 1px solid var(--border);

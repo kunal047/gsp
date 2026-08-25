@@ -3,9 +3,11 @@ import {
   fetchAudit,
   fetchGapAnalysis,
   fetchFederationReport,
+  fetchReadinessReport,
   type AuditEntry,
   type GapAnalysis,
   type FederationReport,
+  type ReadinessReport,
 } from "./api";
 import { districtColor } from "./theme";
 
@@ -13,12 +15,14 @@ export default function OpsView() {
   const [gap, setGap] = useState<GapAnalysis | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [federation, setFederation] = useState<FederationReport | null>(null);
+  const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
 
   useEffect(() => {
     const load = () => {
       fetchGapAnalysis().then(setGap).catch(() => {});
       fetchAudit().then(setAudit).catch(() => {});
       fetchFederationReport().then(setFederation).catch(() => {});
+      fetchReadinessReport().then(setReadiness).catch(() => {});
     };
     load();
     const t = setInterval(load, 4000);
@@ -27,6 +31,27 @@ export default function OpsView() {
 
   return (
     <div className="ops">
+      {readiness && (
+        <section className="readiness" aria-label="Evaluation readiness">
+          <div className="readiness-head">
+            <div><span className="eyebrow">LIVE EVALUATION EVIDENCE</span><h2>Model 1–3 readiness</h2></div>
+            <small>Measured {new Date(readiness.generated_at).toLocaleTimeString([], { hour12: false })}</small>
+          </div>
+          <div className="readiness-grid">
+            {readiness.models.map((model) => (
+              <article className={`readiness-card ${model.status}`} key={model.model}>
+                <div className="readiness-title"><span>MODEL {model.model}</span><b>{model.status}</b></div>
+                <h3>{model.title}</h3>
+                <p>{model.summary}</p>
+                <div className="readiness-checks">{model.checks.map((check) => (
+                  <div key={check.label}><i className={check.ok ? "ok" : "gap"}>{check.ok ? "✓" : "!"}</i><span>{check.label}</span><strong>{check.value}</strong></div>
+                ))}</div>
+                {model.blocker && <div className="readiness-blocker">Next: {model.blocker}</div>}
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
       <div className="ops-col">
         <div className="section-title" style={{ marginTop: 0 }}>
           Coverage & Gap Analysis · Model 1

@@ -129,7 +129,8 @@ or depend on a local database.
   - Watchlist matches and congestion/surge alerts retain one full context frame
     only when the alert fires; the small object crop remains on the detection
     record. Feed-down alerts are metadata-only.
-- **Ops** — coverage, asset lifecycle, federation proof/gap + audit log
+- **Ops** — live Model 1–3 evaluation-readiness checks, coverage, actionable
+  asset lifecycle, federation proof/gap + audit log
 - Header: **role switcher** (RBAC) · live **detections** panel (right)
 
 ## Key API
@@ -138,7 +139,7 @@ or depend on a local database.
   `PATCH /api/cameras/{id}/lifecycle`, `GET /api/gap-analysis`,
   `GET /api/adapters`, `POST /api/ingest/adapters`
 - Reports: `GET /api/reports/cameras.csv`, `GET /api/reports/detections.csv`,
-  `GET /api/reports/federation`
+  `GET /api/reports/federation`, `GET /api/reports/readiness`
 - Analytics: `POST /api/detections`, `GET /api/detections[/stats]`, `POST /api/frame`
 - Tracking: `GET /api/track?plate=|vehicle_type=&color=`
 - Alerts: `GET /api/alerts[/stats]`, `POST /api/alerts/{id}/ack`, `GET/POST /api/watchlist`

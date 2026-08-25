@@ -49,6 +49,8 @@ class CameraCreate(CameraBase):
 
 
 class CameraLifecycleUpdate(BaseModel):
+    make: Optional[str] = Field(default=None, max_length=200)
+    model: Optional[str] = Field(default=None, max_length=200)
     installed_at: Optional[datetime] = None
     maintenance_status: Literal[
         "unknown", "healthy", "due", "overdue", "under_maintenance", "retired"

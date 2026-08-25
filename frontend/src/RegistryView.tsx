@@ -171,6 +171,8 @@ export default function RegistryView({ onChanged }: { onChanged?: () => void }) 
   const editLifecycle = (camera: Camera) => {
     setEditing(camera);
     setLifecycle({
+      make: camera.make || null,
+      model: camera.model || null,
       installed_at: camera.installed_at,
       maintenance_status: camera.maintenance_status || "unknown",
       last_service_at: camera.last_service_at,
@@ -258,6 +260,8 @@ export default function RegistryView({ onChanged }: { onChanged?: () => void }) 
           <label><span>maintenance status</span><select value={lifecycle.maintenance_status} onChange={(e) => setLifecycle({ ...lifecycle, maintenance_status: e.target.value })}>
             <option>unknown</option><option>healthy</option><option>due</option><option>overdue</option><option>under_maintenance</option><option>retired</option>
           </select></label>
+          <label><span>camera make</span><input value={lifecycle.make || ""} onChange={(e) => setLifecycle({ ...lifecycle, make: e.target.value || null })} maxLength={200} /></label>
+          <label><span>camera model</span><input value={lifecycle.model || ""} onChange={(e) => setLifecycle({ ...lifecycle, model: e.target.value || null })} maxLength={200} /></label>
           {(["installed_at", "last_service_at", "next_service_at", "eol_at"] as const).map((field) => (
             <label key={field}><span>{field.replaceAll("_", " ")}</span><input type="datetime-local" value={dateInput(lifecycle[field])} onChange={(e) => setLifecycle({ ...lifecycle, [field]: e.target.value || null })} /></label>
           ))}

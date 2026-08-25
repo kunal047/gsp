@@ -2,6 +2,7 @@
 
 import csv
 import io
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -195,4 +196,87 @@ def federation_report(
             None if len(adapter_systems) >= 2
             else "Configure one independent RTSP/VMS source to prove cross-system federation."
         ),
+    }
+
+
+@router.get("/readiness")
+def evaluation_readiness(
+    db: Session = Depends(get_db),
+    p: Principal = Depends(principal),
+):
+    """Measured Model 1–3 readiness from persisted, non-synthetic evidence."""
+    cameras = db.query(models.Camera)
+    events = db.query(models.DetectionEvent)
+    if p.role == "district_officer" and p.scope:
+        cameras = cameras.filter(models.Camera.city == p.scope)
+        events = events.filter(models.DetectionEvent.city == p.scope)
+
+    total = cameras.count()
+    geocoded = cameras.filter(
+        models.Camera.lat.isnot(None), models.Camera.lng.isnot(None)
+    ).count()
+    lifecycle_complete = cameras.filter(
+        models.Camera.installed_at.isnot(None),
+        models.Camera.make.isnot(None),
+        models.Camera.model.isnot(None),
+    ).count()
+    online = cameras.filter(models.Camera.health_status == "online").count()
+    analytics_cameras = cameras.filter(models.Camera.analytics_enabled.is_(True)).count()
+    tracked_events = events.filter(models.DetectionEvent.track_uuid.isnot(None)).count()
+    evidence_events = events.filter(
+        models.DetectionEvent.track_uuid.isnot(None),
+        models.DetectionEvent.snapshot.isnot(None),
+        models.DetectionEvent.snapshot != "",
+    ).count()
+    active_evidence_cameras = events.filter(
+        models.DetectionEvent.track_uuid.isnot(None),
+        models.DetectionEvent.snapshot.isnot(None),
+        models.DetectionEvent.snapshot != "",
+    ).with_entities(func.count(func.distinct(models.DetectionEvent.camera_id))).scalar() or 0
+
+    federation = federation_report(db=db, p=p)
+    model_1_pass = total > 0 and geocoded == total and lifecycle_complete == total
+    model_2_pass = online > 0 and evidence_events > 0
+    evidence_pct = round((evidence_events / tracked_events * 100) if tracked_events else 0, 1)
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "models": [
+            {
+                "model": 1,
+                "title": "Camera registry and GIS",
+                "status": "pass" if model_1_pass else ("partial" if total else "blocked"),
+                "summary": f"{total} registered cameras; {geocoded} mapped; {lifecycle_complete} complete asset records.",
+                "checks": [
+                    {"label": "Registered cameras", "value": total, "ok": total > 0},
+                    {"label": "GIS coordinates", "value": f"{geocoded}/{total}", "ok": total > 0 and geocoded == total},
+                    {"label": "Complete lifecycle records", "value": f"{lifecycle_complete}/{total}", "ok": total > 0 and lifecycle_complete == total},
+                ],
+                "blocker": None if model_1_pass else "Department-verified make, model and installation dates are still incomplete.",
+            },
+            {
+                "model": 2,
+                "title": "Unified viewing and metadata analytics",
+                "status": "pass" if model_2_pass else ("partial" if online else "blocked"),
+                "summary": f"{online} live cameras; {evidence_events} evidence-backed tracked events from {active_evidence_cameras} cameras.",
+                "checks": [
+                    {"label": "Online feeds", "value": online, "ok": online > 0},
+                    {"label": "Analytics-enabled cameras", "value": analytics_cameras, "ok": analytics_cameras > 0},
+                    {"label": "Tracked events with evidence", "value": f"{evidence_events}/{tracked_events} ({evidence_pct}%)", "ok": evidence_events > 0 and evidence_events == tracked_events},
+                ],
+                "blocker": None if model_2_pass else "No evidence-backed tracked event has completed on a live source.",
+            },
+            {
+                "model": 3,
+                "title": "VMS federation",
+                "status": "pass" if federation["federated"] else "blocked",
+                "summary": f"{federation['adapter_system_count']} independently adapted source system(s); {federation['camera_count']} normalized cameras.",
+                "checks": [
+                    {"label": "Independent source adapters", "value": federation["adapter_system_count"], "ok": federation["adapter_system_count"] >= 2},
+                    {"label": "Normalized cameras", "value": federation["camera_count"], "ok": federation["camera_count"] > 0},
+                    {"label": "Federated event provenance", "value": federation["event_count"], "ok": federation["event_count"] > 0},
+                ],
+                "blocker": federation["demonstration_gap"],
+            },
+        ],
     }
