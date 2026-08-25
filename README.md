@@ -1,7 +1,7 @@
 # Netra — Unified CCTV Integration & Intelligence Platform
 
 Prototype for the **Gujarat Police Innovation Challenge 2026**.
-Hybrid architecture: **Model 1 (Registry + GIS)** + **Model 3 (VMS Federation)** + selective **Model 4 (AI Analytics)**.
+Hybrid architecture: **Model 1 (Registry + GIS)** + **Model 2 (Unified Viewing & Metadata Analytics)** + **Model 3 (VMS Federation)**, with selective AI analytics.
 
 See [PLAN.md](PLAN.md), [HLD.md](HLD.md), [SCALABILITY.md](SCALABILITY.md) for the design.
 
@@ -15,28 +15,58 @@ docker compose up --build
 - Backend API + docs: http://localhost:8000/docs
 - API health: http://localhost:8000/api/health
 
-On first startup the backend onboards the **31 real cameras** from the live
-government feed (`live.sentinelgujarat.in`). **There is no synthetic fallback** —
+On first startup the backend onboards the real cameras currently published by
+the government feed (`live.corp8.cloud`; 30 at last verification). **There is no synthetic fallback** —
 if the live feed is unreachable it retries, then reports the real error via
 `GET /api/health` (`ingest_error`) and the UI shows a red banner with a "Retry
 onboarding" action. Nothing fake is ever substituted.
+
+### Persistent database
+
+Supabase is the primary persistent database. Copy `.env.example` to `.env` and
+replace `DATABASE_URL` with the project's Postgres connection URI.
+The backend accepts standard `postgresql://` URLs and uses a bounded,
+health-checked SQLAlchemy connection pool.
+
+For Supabase, enable the **PostGIS** extension before the first startup. Copy the
+connection URI from **Project → Connect**: use the direct URI on an IPv6-capable
+long-running host, or the session-pooler URI on an IPv4-only host. Append
+`?sslmode=require`, URL-encode special characters in the password, keep the URI
+only in `.env`, then rebuild the backend.
+
+Database evolution is tracked in `supabase/migrations`; apply pending changes
+with `supabase db push --linked` before rebuilding the backend. Evidence image files currently persist in
+the separate `snapshots` Docker volume; multi-host deployment should move those
+objects to Supabase Storage or another S3-compatible store.
+
+Visual detections are evidence-gated: the API stores a detection only after its
+snapshot has been decoded and written successfully, and the database requires a
+non-empty snapshot reference. Legacy metadata-only detections are kept outside
+the operational timeline in a recovery archive.
+
+The old local PostGIS service remains available only as an explicit fallback:
+set the local `DATABASE_URL` shown in `.env.example` and run
+`docker compose --profile local-db up --build`. Normal startup does not create
+or depend on a local database.
 
 ## Status (build slices)
 
 - [x] **S0** Scaffold + docker-compose (PostGIS, Redis, FastAPI, React)
 - [x] **S1** Camera Registry + GIS map (Model 1) — filters, popups
-- [x] **S1b** Real feed ingestion — 31 live CSITMS cameras from
-      `live.sentinelgujarat.in` via adapter (`POST /api/ingest/live`), auto on
+- [x] **S1b** Real feed ingestion — live CSITMS cameras from
+      `live.corp8.cloud` via adapter (`POST /api/ingest/live`), auto on
       startup. Real fields stored verbatim; coordinates geocoded from location
       text and flagged approximate (`coords_approx`); category inferred
       (`dept_inferred`)
 - [x] **S2** Stream gateway + video wall — ffmpeg gateway remuxes/transcodes
-      MKV/AVI → browser MP4; wall shows all 31 with lazy-play (on-screen tiles
+      MKV/AVI → browser MP4; wall shows all cameras with lazy-play (on-screen tiles
       stream, off-screen paused); click-to-enlarge modal. (Cams 6 & 22 return
       HTTP 500 at the source — shown as "unavailable".)
 - [x] **S3** Analytics worker — YOLOv8 vehicle detection + dedicated YOLO
-      license-plate detector + EasyOCR + vehicle colour, overlay masking, and
-      daytime seek. Live detections panel. *Note: plate OCR yield is near-zero on
+      license-plate detector + EasyOCR + vehicle colour, per-camera ByteTrack,
+      one evidence-backed event per completed track, confidence/persistence
+      gating, annotated alert evidence, and source-clock timestamps. Live
+      detections panel. *Note: plate OCR yield is near-zero on
       these wide-angle overview feeds (plates ~20–120px, below OCR floor) — a
       source-camera limitation, documented; pipeline is ready for ANPR-grade
       feeds.*
@@ -61,6 +91,17 @@ onboarding" action. Nothing fake is ever substituted.
       district-scoped cameras+stats; read-only viewers blocked from actions),
       **audit log** (track/ack/BOLO attributed to user+role), and tracking
       **route de-dup** (clean per-camera path with sighting counts).
+- [x] **S8** Evaluation-ready registry & evidence — searchable registry table,
+      manual and CSV camera onboarding, district-scoped write enforcement,
+      audited registry export, and downloadable timestamp/location movement
+      reports for plate or vehicle-attribute searches.
+- [x] **Model 1 asset lifecycle** — installation/service/EOL metadata,
+      maintenance-state API, ageing/incomplete-metadata gap metrics and CSV export.
+- [x] **Model 3 connector spine** — typed CSITMS and configurable RTSP source
+      adapters, canonical provenance, registered-camera stream gateway and
+      per-system federation report. The official two-system proof remains
+      intentionally **not claimed** until a real participant RTSP/VMS feed is set
+      in `RTSP_SOURCES_JSON`.
 
 ## Services
 
@@ -76,16 +117,28 @@ onboarding" action. Nothing fake is ever substituted.
 ## UI tabs
 
 - **Map** — GIS registry (Model 1), pins by district, click for metadata
-- **Video Wall** — all 31 live feeds, lazy-play, click-to-enlarge
+- **Registry** — search/filter inventory, manual + CSV onboarding, provenance,
+  health and analytics metadata, RBAC-gated actions, CSV export
+- **Video Wall** — all onboarded feeds, lazy-play, click-to-enlarge
 - **Tracking** — hybrid plate/attribute search → cross-camera route + timeline
+  + downloadable timestamped movement-evidence report
+- **Watchlist** — searchable case registry, plate/attribute matching rules, RBAC-managed entries
 - **Alerts** — real congestion/surge + operator BOLO, ACK, alert map
-- **Ops** — coverage & gap-analysis + audit log
+  - Click an alert for its retained evidence snapshot, nearby-detection timeline,
+    and the current federated camera stream. Video remains at the source VMS.
+  - Watchlist matches and congestion/surge alerts retain one full context frame
+    only when the alert fires; the small object crop remains on the detection
+    record. Feed-down alerts are metadata-only.
+- **Ops** — coverage, asset lifecycle, federation proof/gap + audit log
 - Header: **role switcher** (RBAC) · live **detections** panel (right)
 
 ## Key API
 
 - Registry: `GET/POST /api/cameras`, `POST /api/cameras/bulk`, `GET /api/stats`,
-  `GET /api/gap-analysis`, `POST /api/ingest/retry`
+  `PATCH /api/cameras/{id}/lifecycle`, `GET /api/gap-analysis`,
+  `GET /api/adapters`, `POST /api/ingest/adapters`
+- Reports: `GET /api/reports/cameras.csv`, `GET /api/reports/detections.csv`,
+  `GET /api/reports/federation`
 - Analytics: `POST /api/detections`, `GET /api/detections[/stats]`, `POST /api/frame`
 - Tracking: `GET /api/track?plate=|vehicle_type=&color=`
 - Alerts: `GET /api/alerts[/stats]`, `POST /api/alerts/{id}/ack`, `GET/POST /api/watchlist`
@@ -94,8 +147,10 @@ onboarding" action. Nothing fake is ever substituted.
 
 ## Data integrity
 
-- Cameras come **only** from the live government feed. No synthetic fallback —
-  a failed onboard surfaces the real error (health `ingest_error` + UI banner).
+- The automatically onboarded cameras come **only** from the live government
+  feed. No synthetic fallback—a failed onboard surfaces the real error (health
+  `ingest_error` + UI banner). Operator-added participant feeds are supported,
+  clearly provenance-labelled, and recorded in the audit trail.
 - Alerts are computed from **real feed analytics** (congestion/surge) + operator
   BOLOs. No fabricated database records.
 - Derived fields are flagged: `coords_approx` (geocoded location),

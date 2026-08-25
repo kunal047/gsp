@@ -9,25 +9,46 @@ every vehicle also carries a (type + colour) descriptor that drives attribute-
 based cross-camera tracking. Overlay text bands are masked out to avoid the
 camera-name / timestamp watermark polluting detection.
 """
+import json
 import os
 import re
+from datetime import datetime, timedelta, timezone
 
 import cv2
 import easyocr
 import numpy as np
 from ultralytics import YOLO
+from ultralytics.trackers.byte_tracker import BYTETracker
+from ultralytics.utils import IterableSimpleNamespace, yaml_load
+from ultralytics.utils.checks import check_yaml
 
-VEHICLE = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
+DEFAULT_VEHICLE_CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 PLATE_RE = re.compile(r"^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}$")
 ALLOW = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 PLATE_MODEL = os.getenv("PLATE_MODEL", "/app/plate.pt")
+VEHICLE_MODEL = os.getenv("VEHICLE_MODEL", "yolov8n.pt")
 VEHICLE_CONF = float(os.getenv("VEHICLE_CONF", "0.35"))
 PLATE_CONF = float(os.getenv("PLATE_CONF", "0.30"))
 PLATE_IMGSZ = int(os.getenv("PLATE_IMGSZ", "1280"))
 MASK_TOP = float(os.getenv("MASK_TOP", "0.06"))  # fraction of height
 MASK_BOT = float(os.getenv("MASK_BOT", "0.06"))
 MIN_PLATE_W = int(os.getenv("MIN_PLATE_W", "45"))  # OCR only if wide enough
+TRACKER_CONFIG = os.getenv("TRACKER_CONFIG", "bytetrack.yaml")
+IST = timezone(timedelta(hours=5, minutes=30))
+TIMESTAMP_RE = re.compile(
+    r"(?P<day>\d{1,2})[-/.](?P<month>\d{1,2})[-/.](?P<year>20\d{2})"
+    r"\D{0,5}(?P<hour>\d{1,2}):(?P<minute>\d{2})(?::(?P<second>\d{2}))?"
+)
+
+
+def _vehicle_classes():
+    """Allow a fine-tuned model (including auto-rickshaw) without code changes."""
+    raw = os.getenv("VEHICLE_CLASS_MAP_JSON")
+    if not raw:
+        return DEFAULT_VEHICLE_CLASSES
+    parsed = json.loads(raw)
+    return {int(key): str(value) for key, value in parsed.items()}
 
 
 def mask_overlay(frame):
@@ -82,11 +103,90 @@ def dominant_color(crop):
     return "other"
 
 
+def parse_bytetrack_rows(tracked, frame, vehicle_classes):
+    """Parse Ultralytics ByteTrack's xyxy,id,score,class,index contract."""
+    vehicles = []
+    for row in tracked:
+        if len(row) < 7:
+            continue
+        x1, y1, x2, y2 = [int(value) for value in row[:4]]
+        track_id, confidence, cls = int(row[4]), float(row[5]), int(row[6])
+        if cls not in vehicle_classes:
+            continue
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+        if x2 <= x1 or y2 <= y1:
+            continue
+        crop = frame[y1:y2, x1:x2]
+        vehicles.append(
+            {
+                "box": (x1, y1, x2, y2),
+                "track_id": track_id,
+                "vehicle_type": vehicle_classes[cls],
+                "confidence": round(confidence, 3),
+                "color": dominant_color(crop),
+                "crop": crop,
+                "plate": None,
+                "plate_confidence": None,
+            }
+        )
+    return vehicles
+
+
 class ANPR:
     def __init__(self):
-        self.vehicle = YOLO("yolov8n.pt")
+        self.vehicle_classes = _vehicle_classes()
+        self.vehicle = YOLO(VEHICLE_MODEL)
         self.plate = YOLO(PLATE_MODEL)
         self.reader = easyocr.Reader(["en"], gpu=False)
+        tracker_path = check_yaml(TRACKER_CONFIG)
+        self.tracker_args = IterableSimpleNamespace(**yaml_load(tracker_path))
+        self.trackers = {}
+
+    def _tracker(self, camera_id):
+        tracker = self.trackers.get(camera_id)
+        if tracker is None:
+            tracker = BYTETracker(args=self.tracker_args, frame_rate=30)
+            self.trackers[camera_id] = tracker
+        return tracker
+
+    def reset_tracker(self, camera_id):
+        self.trackers.pop(camera_id, None)
+
+    def read_footage_timestamp(self, frame):
+        """Read the source's burned-in timestamp without treating it as a plate."""
+        if frame is None or frame.size == 0:
+            return None
+        height = frame.shape[0]
+        band = max(1, int(height * max(MASK_TOP, MASK_BOT, 0.10)))
+        overlay = np.vstack((frame[:band, :], frame[-band:, :]))
+        overlay = cv2.resize(overlay, None, fx=2.0, fy=2.0)
+        try:
+            results = self.reader.readtext(
+                overlay,
+                allowlist="0123456789-/:. ",
+                detail=0,
+                paragraph=False,
+            )
+        except Exception:
+            return None
+        text = " ".join(results)
+        match = TIMESTAMP_RE.search(text)
+        if not match:
+            return None
+        values = {key: int(value or 0) for key, value in match.groupdict().items()}
+        try:
+            return datetime(
+                values["year"],
+                values["month"],
+                values["day"],
+                values["hour"],
+                values["minute"],
+                values["second"],
+                tzinfo=IST,
+            )
+        except ValueError:
+            return None
 
     def _read_plate(self, crop):
         if crop is None or crop.size == 0:
@@ -99,8 +199,17 @@ class ANPR:
             res = self.reader.readtext(up, allowlist=ALLOW, detail=1)
         except Exception:
             return None, 0.0
-        best, best_c = None, 0.0
-        for _, text, conf in res:
+        candidates = [(text, float(conf)) for _, text, conf in res]
+        # Indian plates are printed in spaced groups (GJ 01 AB 1234), so EasyOCR
+        # often returns several tokens; also try their left-to-right join.
+        if len(res) >= 2:
+            ordered = sorted(res, key=lambda r: r[0][0][0])
+            candidates.append(
+                ("".join(t for _, t, _ in ordered),
+                 min(float(c) for _, _, c in ordered))
+            )
+        best, best_score, best_conf = None, 0.0, 0.0
+        for text, conf in candidates:
             t = re.sub(r"[^A-Z0-9]", "", text.upper())
             if len(t) < 6 or len(t) > 11:
                 continue
@@ -108,35 +217,25 @@ class ANPR:
             digits = sum(c.isdigit() for c in t)
             if letters < 2 or digits < 3:
                 continue
-            score = float(conf) + (0.3 if PLATE_RE.match(t) else 0.0)
-            if score > best_c:
-                best, best_c = t, float(conf)
-        return best, best_c
+            score = conf + (0.3 if PLATE_RE.match(t) else 0.0)
+            if score > best_score:
+                best, best_score, best_conf = t, score, conf
+        return best, best_conf
 
-    def process(self, frame):
+    def process(self, frame, camera_id):
         masked = mask_overlay(frame)
 
-        # Stage 1 — vehicles
+        # Stage 1 — vehicles, with independent ByteTrack state per camera.
         vres = self.vehicle(masked, verbose=False, conf=VEHICLE_CONF)[0]
-        vehicles = []
-        for b in vres.boxes:
-            cls = int(b.cls[0])
-            if cls not in VEHICLE:
-                continue
-            x1, y1, x2, y2 = [int(v) for v in b.xyxy[0].tolist()]
-            x1, y1 = max(0, x1), max(0, y1)
-            crop = frame[y1:y2, x1:x2]
-            vehicles.append(
-                {
-                    "box": (x1, y1, x2, y2),
-                    "vehicle_type": VEHICLE[cls],
-                    "confidence": round(float(b.conf[0]), 3),
-                    "color": dominant_color(crop),
-                    "crop": crop,
-                    "plate": None,
-                    "plate_confidence": None,
-                }
-            )
+        try:
+            tracked = self._tracker(camera_id).update(vres.boxes, masked)
+        except (IndexError, ValueError):
+            # ByteTrack can wedge on certain detection/box shapes (observed on
+            # some H.265 frames). Discard the corrupted tracker state and let it
+            # rebuild from the next frame rather than failing every frame.
+            self.reset_tracker(camera_id)
+            return []
+        vehicles = parse_bytetrack_rows(tracked, frame, self.vehicle_classes)
 
         # Stage 2 — plates, associated to the vehicle that contains them
         pres = self.plate(
@@ -154,7 +253,9 @@ class ANPR:
                 if x1 <= cx <= x2 and y1 <= cy <= y2:
                     v["plate"] = plate
                     v["plate_confidence"] = round(pconf, 3)
-                    v["crop"] = plate_crop  # snapshot the plate
+                    # Keep the whole vehicle crop as evidence. The plate crop is
+                    # only an OCR input; replacing the evidence with it makes
+                    # attribute matches impossible to verify visually.
                     break
 
         return vehicles

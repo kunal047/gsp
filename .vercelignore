@@ -1,0 +1,8 @@
+.env
+analytics/
+gateway/
+data/
+**/__pycache__/
+**/*.pyc
+frontend/dist/
+frontend/node_modules/

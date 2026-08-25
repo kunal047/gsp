@@ -1,6 +1,7 @@
 services:
   db:
     image: postgis/postgis:16-3.4
+    profiles: ["local-db"]
     environment:
       POSTGRES_USER: netra
       POSTGRES_PASSWORD: netra
@@ -22,32 +23,53 @@ services:
 
   backend:
     build: ./backend
+    restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+psycopg2://netra:netra@db:5432/netra
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
+      DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-300}
       REDIS_URL: redis://redis:6379/0
-      LIVE_BASE: https://live.sentinelgujarat.in
+      LIVE_BASE: ${LIVE_BASE:-https://live.corp8.cloud}
+      RTSP_SOURCES_JSON: ${RTSP_SOURCES_JSON:-[]}
+      ATTRIBUTE_MIN_CLASS_CONFIDENCE: ${ATTRIBUTE_MIN_CLASS_CONFIDENCE:-0.75}
+      HEAVY_VEHICLE_CLASS_CONFIDENCE: ${HEAVY_VEHICLE_CLASS_CONFIDENCE:-0.85}
     volumes:
       - snapshots:/snapshots
+      - ./backend/app:/app/app
     ports:
       - "8000:8000"
-    depends_on:
-      db:
-        condition: service_healthy
 
   gateway:
     build: ./gateway
+    volumes:
+      - ./gateway/app.py:/app/app.py:ro
     environment:
-      LIVE_BASE: https://live.sentinelgujarat.in
+      LIVE_BASE: ${LIVE_BASE:-https://live.corp8.cloud}
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
     ports:
       - "8081:8081"
 
   analytics:
     build: ./analytics
+    volumes:
+      - ./analytics/worker.py:/app/worker.py:ro
+      - ./analytics/anpr.py:/app/anpr.py:ro
+      - ./analytics/tracking.py:/app/tracking.py:ro
     environment:
       BACKEND_URL: http://backend:8000
       MAX_STREAMS: "6"
       SAMPLE_EVERY: "2.0"
       OCR_TOPK: "4"
+      SEEK_SECONDS: ${SEEK_SECONDS:-0}
+      TRACK_MIN_HITS: ${TRACK_MIN_HITS:-3}
+      TRACK_MAX_MISSES: ${TRACK_MAX_MISSES:-3}
+      TRACK_MIN_CONFIDENCE: ${TRACK_MIN_CONFIDENCE:-0.45}
+      VEHICLE_MODEL: ${VEHICLE_MODEL:-yolov8n.pt}
+      VEHICLE_CLASS_MAP_JSON: ${VEHICLE_CLASS_MAP_JSON:-}
+      CAMERA_EXPECTED_DIRECTIONS_JSON: ${CAMERA_EXPECTED_DIRECTIONS_JSON:-}
     depends_on:
       - backend
 

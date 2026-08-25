@@ -108,7 +108,28 @@ At scale this is a search problem over ~100 TB of tiny events — fast and horiz
 3. **Statewide** — replicate the regional template across all ranges/districts; connect DB integrations; DR cutover drills.
 4. **Private-camera onboarding** — societies/malls (viewing-only, consent-gated) where permitted.
 
-## 8. Headline numbers (for the deck)
+## 8. Indicative cost envelope
+
+These are planning ranges, not vendor quotations. They exclude the existing
+80,000 cameras/NVRs and land/buildings, and should be replaced by discovered
+department inventory plus RFP pricing. The transparent model is more defensible
+than a single unsupported total.
+
+| Cost block | Planning basis | Indicative range |
+|---|---|---|
+| Distributed analytics | 600–1,000 blended edge/regional accelerators at ₹4–10 lakh | ₹24–100 crore |
+| 13–19 PB usable tiered storage | ₹12,000–20,000 per usable TB including controllers/replication | ₹156–380 crore |
+| Regional/core compute, event bus, WAN uplift, HA + DR | Six range hubs plus state and DR cores | ₹80–160 crore |
+| Platform engineering, adapters, cybersecurity, integration and rollout | Multi-department staged implementation | ₹100–200 crore |
+| **Statewide capital envelope** | Existing camera estate reused | **₹360–840 crore** |
+| **Annual operating envelope** | Support, bandwidth uplift, power/DC, replacements, security operations | **₹55–140 crore/year** |
+
+Pilot gate: budget **₹10–18 crore capital** and **₹2–4 crore/year operating**
+for ~2,000 cameras across 2–3 districts, then replace every assumption with
+measured bitrates, retention policy, accelerator throughput and discovered
+infrastructure before statewide procurement.
+
+## 9. Headline numbers (for the deck)
 - **~200 Gbps** video if centralized → **so we don't**; events are **~1.6 Gbps** peak.
 - Video **~32 PB** @ 15 days vs events **~100 TB** @ 30 days → events are **~0.3%** of the data.
 - **~600–1,000** distributed accelerators (realistic) vs 2,000 (naive central).

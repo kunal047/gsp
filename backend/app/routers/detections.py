@@ -1,11 +1,15 @@
 import base64
+import binascii
+import hashlib
 import os
 import re
+import time
 import uuid
+from datetime import datetime
 from math import asin, cos, radians, sin, sqrt
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -17,6 +21,8 @@ from ..rbac import Principal, audit, principal
 router = APIRouter(prefix="/api", tags=["detections"])
 
 SNAP_DIR = os.getenv("SNAPSHOT_DIR", "/snapshots")
+EVIDENCE_DEDUP_SECONDS = int(os.getenv("EVIDENCE_DEDUP_SECONDS", "600"))
+_evidence_seen: dict[tuple[str, str, str], float] = {}
 
 
 def normalize_plate(plate: Optional[str]) -> Optional[str]:
@@ -25,9 +31,22 @@ def normalize_plate(plate: Optional[str]) -> Optional[str]:
     return re.sub(r"[^A-Z0-9]", "", plate.upper())
 
 
+def _parse_ts(value) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
 def _save_snapshot(b64: str) -> Optional[str]:
     try:
-        raw = base64.b64decode(b64.split(",")[-1])
+        raw = _decode_snapshot(b64)
+        if raw is None:
+            return None
         os.makedirs(SNAP_DIR, exist_ok=True)
         fn = f"{uuid.uuid4().hex}.jpg"
         with open(os.path.join(SNAP_DIR, fn), "wb") as f:
@@ -38,18 +57,96 @@ def _save_snapshot(b64: str) -> Optional[str]:
         return None
 
 
+def _decode_snapshot(b64: str) -> Optional[bytes]:
+    try:
+        raw = base64.b64decode(b64.split(",")[-1], validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    # The analytics contract emits JPEG. Reject arbitrary/empty bytes so a
+    # non-null database path always points to actual visual evidence.
+    if len(raw) < 128 or not raw.startswith(b"\xff\xd8") or not raw.endswith(b"\xff\xd9"):
+        return None
+    return raw
+
+
+def _snapshot_digest(b64: str) -> Optional[str]:
+    raw = _decode_snapshot(b64)
+    return hashlib.sha256(raw).hexdigest() if raw else None
+
+
+def _drop_duplicate_evidence(db: Session, alerts, camera_id: str, digest: str):
+    """Discard alert rows whose exact evidence frame recently appeared.
+
+    Watchlist cases are deduplicated independently. Traffic congestion and
+    surge share one group so a single frame becomes one operational incident.
+    """
+    now = time.monotonic()
+    alerts = sorted(alerts, key=lambda alert: alert.kind != "congestion")
+    kept = []
+    dropped = 0
+    for alert in alerts:
+        group = (
+            f"watchlist:{alert.case_ref or alert.watchlist_id}"
+            if alert.kind == "watchlist"
+            else "traffic"
+        )
+        key = (camera_id, group, digest)
+        previous = _evidence_seen.get(key)
+        if previous is not None and now - previous < EVIDENCE_DEDUP_SECONDS:
+            db.delete(alert)
+            dropped += 1
+        else:
+            _evidence_seen[key] = now
+            kept.append(alert)
+    if len(_evidence_seen) > 2000:
+        cutoff = now - EVIDENCE_DEDUP_SECONDS
+        for key, seen_at in list(_evidence_seen.items()):
+            if seen_at < cutoff:
+                _evidence_seen.pop(key, None)
+    return kept, dropped
+
+
 @router.post("/detections", response_model=schemas.DetectionOut)
 def ingest_detection(d: schemas.DetectionIn, db: Session = Depends(get_db)):
+    if d.track_uuid:
+        existing = (
+            db.query(models.DetectionEvent)
+            .filter(models.DetectionEvent.track_uuid == d.track_uuid)
+            .first()
+        )
+        if existing:
+            existing.alert_ids = []
+            return existing
+    if not d.snapshot_b64:
+        raise HTTPException(
+            status_code=422,
+            detail="snapshot_b64 is required; evidence-less detections are not stored",
+        )
+    snap = _save_snapshot(d.snapshot_b64)
+    if not snap:
+        raise HTTPException(
+            status_code=422,
+            detail="snapshot could not be decoded or saved; detection was not stored",
+        )
     cam = (
         db.query(models.Camera)
         .filter(models.Camera.camera_id == d.camera_id)
         .first()
     )
-    snap = _save_snapshot(d.snapshot_b64) if d.snapshot_b64 else None
+    event_ts = d.event_ts or d.first_seen
+    first_seen = d.first_seen or event_ts
+    last_seen = d.last_seen or event_ts
+    if first_seen and last_seen and last_seen < first_seen:
+        raise HTTPException(
+            status_code=422,
+            detail="last_seen must be greater than or equal to first_seen",
+        )
     ev = models.DetectionEvent(
         camera_id=d.camera_id,
         camera_name=cam.name if cam else d.camera_id,
         city=cam.city if cam else None,
+        source_system=cam.source_system if cam else None,
+        source_adapter=cam.source_adapter if cam else None,
         event_type=d.event_type,
         plate=d.plate,
         plate_norm=normalize_plate(d.plate),
@@ -57,9 +154,27 @@ def ingest_detection(d: schemas.DetectionIn, db: Session = Depends(get_db)):
         color=d.color,
         confidence=d.confidence,
         plate_confidence=d.plate_confidence,
+        track_uuid=d.track_uuid,
+        track_id=d.track_id,
+        track_hits=d.track_hits,
+        class_confidence=d.class_confidence,
+        color_confidence=d.color_confidence,
         snapshot=snap,
         lat=cam.lat if cam else None,
         lng=cam.lng if cam else None,
+        first_seen=first_seen,
+        last_seen=last_seen,
+        ts=event_ts,
+        time_source=d.time_source,
+        direction=d.direction,
+        dwell_seconds=d.dwell_seconds,
+        motion_px_per_second=d.motion_px_per_second,
+        stopped=d.stopped,
+        wrong_way=d.wrong_way,
+        bbox_x1=d.bbox_x1,
+        bbox_y1=d.bbox_y1,
+        bbox_x2=d.bbox_x2,
+        bbox_y2=d.bbox_y2,
     )
     db.add(ev)
     db.commit()
@@ -70,15 +185,72 @@ def ingest_detection(d: schemas.DetectionIn, db: Session = Depends(get_db)):
             "camera_id": ev.camera_id,
             "camera_name": ev.camera_name,
             "city": ev.city,
+            "source_system": ev.source_system,
+            "source_adapter": ev.source_adapter,
             "event_type": ev.event_type,
             "plate": ev.plate,
             "vehicle_type": ev.vehicle_type,
+            "track_uuid": ev.track_uuid,
+            "track_id": ev.track_id,
             "ts": ev.ts,
         }
     )
     # Operator watchlist (BOLO) match -> real-time alert
-    integrations.check_watchlist(db, ev)
+    matches = integrations.check_watchlist(db, ev)
+    # The worker uses these IDs to upload the full contextual frame only when
+    # a match occurred. Pydantic reads this transient attribute into the API
+    # response; it is intentionally not a database column.
+    ev.alert_ids = [alert.id for alert in matches]
     return ev
+
+
+@router.post("/detections/{detection_id}/evidence")
+def detection_evidence(
+    detection_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+):
+    """Replace a match crop with its selectively retained context frame."""
+    detection = (
+        db.query(models.DetectionEvent)
+        .filter(models.DetectionEvent.id == detection_id)
+        .first()
+    )
+    if not detection or detection.camera_id != payload.get("camera_id"):
+        return {"attached": 0}
+    requested = payload.get("alert_ids") or []
+    alerts = (
+        db.query(models.Alert)
+        .filter(
+            models.Alert.id.in_(requested),
+            models.Alert.detection_id == detection_id,
+            models.Alert.kind == "watchlist",
+        )
+        .all()
+    )
+    snapshot_b64 = payload.get("snapshot_b64")
+    if not alerts or not snapshot_b64:
+        return {"attached": 0}
+    digest = _snapshot_digest(snapshot_b64)
+    if not digest:
+        return {"attached": 0}
+    alerts, dropped = _drop_duplicate_evidence(
+        db, alerts, detection.camera_id, digest
+    )
+    if not alerts:
+        db.commit()
+        return {"attached": 0, "duplicates_dropped": dropped}
+    context_frame = _save_snapshot(snapshot_b64)
+    if not context_frame:
+        return {"attached": 0}
+    for alert in alerts:
+        alert.snapshot = context_frame
+    db.commit()
+    return {
+        "attached": len(alerts),
+        "duplicates_dropped": dropped,
+        "snapshot": context_frame,
+    }
 
 
 @router.post("/frame")
@@ -91,10 +263,59 @@ def frame_summary(payload: dict, db: Session = Depends(get_db)):
         .first()
     )
     if not cam:
-        return {"alerts": 0}
+        return {"alerts": 0, "alert_ids": []}
     count = int(payload.get("vehicle_count", 0))
-    created = integrations.process_frame(db, cam, count)
-    return {"alerts": len(created)}
+    created = integrations.process_frame(
+        db,
+        cam,
+        count,
+        event_ts=_parse_ts(payload.get("event_ts")),
+        time_source=payload.get("time_source") or "ingest",
+    )
+    return {"alerts": len(created), "alert_ids": [a.id for a in created]}
+
+
+@router.post("/frame/evidence")
+def frame_evidence(payload: dict, db: Session = Depends(get_db)):
+    """Attach one selectively retained full frame to traffic alerts.
+
+    The worker calls this only after `/frame` reports newly-created alerts, so
+    ordinary sampled frames are never persisted centrally.
+    """
+    camera_id = payload.get("camera_id")
+    alert_ids = payload.get("alert_ids") or []
+    snapshot_b64 = payload.get("snapshot_b64")
+    if not camera_id or not alert_ids or not snapshot_b64:
+        return {"attached": 0}
+    alerts = (
+        db.query(models.Alert)
+        .filter(
+            models.Alert.id.in_(alert_ids),
+            models.Alert.camera_id == camera_id,
+            models.Alert.kind.in_(("congestion", "surge")),
+        )
+        .all()
+    )
+    if not alerts:
+        return {"attached": 0}
+    digest = _snapshot_digest(snapshot_b64)
+    if not digest:
+        return {"attached": 0}
+    alerts, dropped = _drop_duplicate_evidence(db, alerts, camera_id, digest)
+    if not alerts:
+        db.commit()
+        return {"attached": 0, "duplicates_dropped": dropped}
+    evidence = _save_snapshot(snapshot_b64)
+    if not evidence:
+        return {"attached": 0}
+    for alert in alerts:
+        alert.snapshot = evidence
+    db.commit()
+    return {
+        "attached": len(alerts),
+        "duplicates_dropped": dropped,
+        "snapshot": evidence,
+    }
 
 
 @router.get("/detections", response_model=List[schemas.DetectionOut])
@@ -104,9 +325,12 @@ def list_detections(
     camera_id: Optional[str] = None,
     plate: Optional[str] = None,
     event_type: Optional[str] = None,
+    include_legacy: bool = False,
     db: Session = Depends(get_db),
 ):
     q = db.query(models.DetectionEvent)
+    if not include_legacy:
+        q = q.filter(models.DetectionEvent.track_uuid.isnot(None))
     if since_id:
         q = q.filter(models.DetectionEvent.id > since_id)
     if camera_id:
@@ -133,6 +357,7 @@ def track(
     vehicle attributes (type + colour), and return a time-ordered route across
     cameras — the scored 'movement history' output."""
     q = db.query(models.DetectionEvent)
+    q = q.filter(models.DetectionEvent.track_uuid.isnot(None))
     mode = None
     if plate:
         q = q.filter(
@@ -154,6 +379,8 @@ def track(
             "camera_id": r.camera_id,
             "camera_name": r.camera_name,
             "city": r.city,
+            "source_system": r.source_system,
+            "source_adapter": r.source_adapter,
             "lat": r.lat,
             "lng": r.lng,
             "ts": r.ts,
@@ -161,6 +388,19 @@ def track(
             "vehicle_type": r.vehicle_type,
             "color": r.color,
             "snapshot": r.snapshot,
+            "track_uuid": r.track_uuid,
+            "track_id": r.track_id,
+            "track_hits": r.track_hits,
+            "class_confidence": r.class_confidence,
+            "color_confidence": r.color_confidence,
+            "first_seen": r.first_seen,
+            "last_seen": r.last_seen,
+            "time_source": r.time_source,
+            "direction": r.direction,
+            "dwell_seconds": r.dwell_seconds,
+            "motion_px_per_second": r.motion_px_per_second,
+            "stopped": r.stopped,
+            "wrong_way": r.wrong_way,
         }
         for r in rows
         if r.lat is not None and r.lng is not None
@@ -176,6 +416,7 @@ def track(
                 "camera_id": cid,
                 "camera_name": r["camera_name"],
                 "city": r["city"],
+                "source_system": r["source_system"],
                 "lat": r["lat"],
                 "lng": r["lng"],
                 "first_seen": r["ts"],
@@ -240,6 +481,7 @@ def track_single_vehicle(
     pool = (
         db.query(models.DetectionEvent)
         .filter(
+            models.DetectionEvent.track_uuid.isnot(None),
             models.DetectionEvent.vehicle_type == vehicle_type,
             models.DetectionEvent.color == color,
             models.DetectionEvent.lat.isnot(None),
@@ -292,6 +534,7 @@ def track_single_vehicle(
             "camera_id": s.camera_id,
             "camera_name": s.camera_name,
             "city": s.city,
+            "source_system": s.source_system,
             "lat": s.lat,
             "lng": s.lng,
             "ts": s.ts,
@@ -328,19 +571,23 @@ def track_single_vehicle(
 
 @router.get("/detections/stats")
 def detection_stats(db: Session = Depends(get_db)):
-    total = db.query(func.count(models.DetectionEvent.id)).scalar()
+    operational = models.DetectionEvent.track_uuid.isnot(None)
+    total = (
+        db.query(func.count(models.DetectionEvent.id)).filter(operational).scalar()
+    )
     anpr = (
         db.query(func.count(models.DetectionEvent.id))
-        .filter(models.DetectionEvent.event_type == "anpr")
+        .filter(operational, models.DetectionEvent.event_type == "anpr")
         .scalar()
     )
     plates = (
         db.query(func.count(func.distinct(models.DetectionEvent.plate_norm)))
-        .filter(models.DetectionEvent.plate_norm.isnot(None))
+        .filter(operational, models.DetectionEvent.plate_norm.isnot(None))
         .scalar()
     )
     cams = (
         db.query(func.count(func.distinct(models.DetectionEvent.camera_id)))
+        .filter(operational)
         .scalar()
     )
     return {

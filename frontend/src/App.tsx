@@ -6,16 +6,20 @@ import DetectionsPanel from "./DetectionsPanel";
 import TrackingView from "./TrackingView";
 import AlertsView from "./AlertsView";
 import OpsView from "./OpsView";
+import WatchlistView from "./WatchlistView";
+import RegistryView from "./RegistryView";
 import {
   fetchCameras,
   fetchStats,
   fetchAlertStats,
+  fetchDetectionStats,
   fetchHealth,
   retryIngest,
   setPrincipal,
   type Camera,
   type Stats,
   type Health,
+  type DetStats,
 } from "./api";
 
 const PRINCIPALS = [
@@ -37,19 +41,33 @@ const PRINCIPALS = [
 import { STATUS_COLORS, districtColor } from "./theme";
 
 export default function App() {
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    const saved = localStorage.getItem("netra-theme");
+    if (saved === "dark" || saved === "light") return saved;
+    return window.matchMedia("(prefers-color-scheme: light)").matches
+      ? "light"
+      : "dark";
+  });
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [detStats, setDetStats] = useState<DetStats | null>(null);
   const [cityFilter, setCityFilter] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<
-    "map" | "wall" | "track" | "alerts" | "ops"
+    "map" | "registry" | "wall" | "track" | "watchlist" | "alerts" | "ops"
   >("map");
   const [selected, setSelected] = useState<Camera | null>(null);
   const [alertCount, setAlertCount] = useState(0);
   const [health, setHealth] = useState<Health | null>(null);
   const [princIdx, setPrincIdx] = useState(0);
   const [rev, setRev] = useState(0);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    localStorage.setItem("netra-theme", theme);
+  }, [theme]);
 
   const changeRole = (i: number) => {
     setPrincipal(PRINCIPALS[i]);
@@ -63,6 +81,7 @@ export default function App() {
         .then((s) => setAlertCount(s.unacknowledged))
         .catch(() => {});
       fetchHealth().then(setHealth).catch(() => {});
+      fetchDetectionStats().then(setDetStats).catch(() => {});
     };
     poll();
     const t = setInterval(poll, 3000);
@@ -119,6 +138,12 @@ export default function App() {
             Map
           </button>
           <button
+            className={view === "registry" ? "active" : ""}
+            onClick={() => setView("registry")}
+          >
+            Registry
+          </button>
+          <button
             className={view === "wall" ? "active" : ""}
             onClick={() => setView("wall")}
           >
@@ -129,6 +154,12 @@ export default function App() {
             onClick={() => setView("track")}
           >
             Tracking
+          </button>
+          <button
+            className={view === "watchlist" ? "active" : ""}
+            onClick={() => setView("watchlist")}
+          >
+            Watchlist
           </button>
           <button
             className={
@@ -160,6 +191,19 @@ export default function App() {
             </option>
           ))}
         </select>
+        <button
+          className="theme-toggle"
+          onClick={() =>
+            setTheme((value) => (value === "dark" ? "light" : "dark"))
+          }
+          aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} appearance`}
+          title="Appearance"
+        >
+          <span className="theme-symbol" aria-hidden="true">
+            {theme === "dark" ? "◐" : "◑"}
+          </span>
+          {theme === "dark" ? "Light" : "Dark"}
+        </button>
         <div className="kpis">
           <div className="kpi">
             <b>{stats?.total ?? "—"}</b>
@@ -169,13 +213,23 @@ export default function App() {
             <b>{cities.length || "—"}</b>
             <small>Districts</small>
           </div>
-          <div className="kpi">
+          <div className="kpi" title="Cameras the provider reports as live">
             <b>{stats?.by_status?.online ?? "—"}</b>
             <small>Online</small>
           </div>
-          <div className="kpi">
-            <b>{stats?.analytics_enabled ?? "—"}</b>
-            <small>ANPR</small>
+          <div
+            className="kpi"
+            title="Cameras currently processed by the analytics worker"
+          >
+            <b>{detStats?.active_cameras ?? "—"}</b>
+            <small>Analysed</small>
+          </div>
+          <div
+            className="kpi"
+            title="Distinct plates confirmed by multi-frame consensus"
+          >
+            <b>{detStats?.unique_plates ?? "—"}</b>
+            <small>Plates</small>
           </div>
         </div>
       </header>
@@ -253,7 +307,7 @@ export default function App() {
                 <span className="live-dot" /> Live government feed
               </div>
               <div className="prov">
-                {stats?.total ?? "—"} real CSITMS cameras · onboarded via adapter
+                {(stats?.by_source_system?.["Gujarat CSITMS"] ?? "—")} live CSITMS cameras · {stats?.total ?? "—"} registry assets
               </div>
               {anyApprox && (
                 <div className="prov">
@@ -271,13 +325,17 @@ export default function App() {
           />
         ) : view === "track" ? (
           <TrackingView />
+        ) : view === "registry" ? (
+          <RegistryView key={rev} onChanged={() => setRev((r) => r + 1)} />
         ) : view === "alerts" ? (
           <AlertsView />
+        ) : view === "watchlist" ? (
+          <WatchlistView key={rev} />
         ) : (
           <OpsView />
         )}
 
-        <DetectionsPanel />
+        <DetectionsPanel onOpenAlerts={() => setView("alerts")} />
       </div>
 
       {selected && (

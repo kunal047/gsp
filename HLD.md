@@ -2,11 +2,11 @@
 
 **Project:** Netra — Statewide CCTV Integration & Intelligence Platform
 **Submitted for:** Gujarat Police Innovation Challenge 2026
-**Chosen approach:** Hybrid — **Model 1 (mandatory)** + **Model 3 (VMS Federation & Middleware)** + selective **Model 4 (Central AI Analytics)**
+**Chosen approach:** Hybrid — **Model 1 (mandatory)** + **Model 2 (Unified Viewing & Metadata Analytics)** + **Model 3 (VMS Federation & Middleware)**, with selective central AI analytics
 **Version:** 0.2 (as-built + production design) · **Date:** 2026-08-17
 
 > **Status:** A working prototype of this design has been built and runs against
-> the **real** Gujarat CSITMS live feed (`live.sentinelgujarat.in`, 31 cameras).
+> the **real** Gujarat CSITMS live feed (`live.corp8.cloud`, currently 30 cameras).
 > Sections below marked **[built]** describe what is implemented; the rest is the
 > production design that the prototype's interfaces are ready to scale into. A
 > summary of exactly what was implemented (and its honest limitations) is in §19.
@@ -45,7 +45,10 @@ The platform delivers the challenge's scored test case — onboard ~50 feeds and
 | **Model 3 — Federation & Middleware** | Adapter/connector layer + unified API + stream gateway + event bus between departmental VMS and downstream apps | Answers heterogeneity + scale without touching departments; the interoperability core |
 | **Model 4 — Central AI Analytics** (selective) | ANPR, detection, cross-camera tracking, DB-integrated alerts | Delivers the scored analytics test case; designed to run at edge/regional scale |
 
-We deliberately **do not** use Model 2 (direct point-to-point integration): at 26 departments × thousands of cameras it does not scale and couples the platform to every vendor. The federation layer (Model 3) is the scalable answer, and combining it with the mandatory Model 1 plus selective Model 4 analytics is the explicitly-rewarded hybrid (FAQ #23, #38).
+We use Model 2's unified-viewing and searchable-metadata capabilities as the
+operator-facing layer, but place Model 3 adapters behind its stream contract so
+department/vendor differences do not leak into the viewer. Direct connectors
+remain possible for the PoC; statewide onboarding uses the federation layer.
 
 ## 5. Logical architecture
 
@@ -89,7 +92,7 @@ Physical/deployment tiers (edge → regional → state) and their sizing are in 
 
 ### 6.2 Integration / Adapter layer (heterogeneity)
 - **Adapter interface** (`connect → authenticate → discover → stream → status`) implemented per source type. Adding a new vendor = a new adapter, no core change (extensible connector framework, FAQ #38).
-- **[built]** The **live-feed adapter** onboards the real CSITMS feed over **open HTTP/REST + standard HTTP video** — *no vendor SDK*. It reads `live.sentinelgujarat.in/api/cameras`, maps each camera to the registry schema, sets `stream_url = /stream/{id}`, geocodes the free-text location to an **approximate** coordinate (flagged `coords_approx`, since the source API has no lat/lng), and infers a coarse category (flagged `dept_inferred`).
+- **[built]** The **live-feed adapter** onboards the real CSITMS feed over **open HTTP/REST + standard HTTP video** — *no vendor SDK*. It reads `live.corp8.cloud/api/cameras`, maps each camera to the registry schema, sets `stream_url = /stream/{id}`, geocodes the free-text location to an **approximate** coordinate (flagged `coords_approx`, since the source API has no lat/lng), and infers a coarse category (flagged `dept_inferred`).
 - **[framework-ready]** Additional adapter types the framework supports (not yet built, because the live source doesn't need them): **ONVIF** (Profile S/T/G), **RTSP**, **vendor SDKs** (Milestone, Genetec, CP Plus, Hikvision, Dahua), **analog** via existing encoders/DVR → RTSP. Onboarding a new source type = one drop-in adapter, no core change.
 - Normalizes every source to a common feed descriptor; the stream gateway (§6.3) handles container/codec differences.
 
@@ -100,9 +103,14 @@ Physical/deployment tiers (edge → regional → state) and their sizing are in 
 ### 6.4 Analytics engine (Model 4, selective) **[built]**
 - **[built] Two-stage ANPR:** **YOLOv8n** detects vehicles (type) → a **dedicated YOLO licence-plate detector** localises plates → **EasyOCR** reads them (upscaled crop, Indian-plate regex + confidence gate). Overlay bands are masked so the burned-in camera-name/timestamp watermark cannot be mis-read as a plate.
 - **[built] Vehicle attributes:** dominant **colour** (HSV) + type per vehicle — the key signal for attribute-based tracking when plates are unreadable.
+- **[built] Intra-camera tracking:** isolated **ByteTrack** state per camera; detections must persist across configurable observations and produce one durable event when the track completes. Type/colour are majority-voted across the track rather than trusted from one frame.
+- **[built] Verifiable evidence:** the detection retains the vehicle crop; watchlist evidence retains a contextual crop with the triggering track explicitly boxed and labelled.
+- **[built] Event time:** the source player's `wall_time + slot_offset` clock is authoritative; burned-in timestamp OCR and explicit file-start configuration are fallbacks. Ingest time is retained separately for throttling and audit.
+- **[built] Tracking-derived analytics:** image-plane direction, dwell, stopped state and pixel motion are stored per track. Wrong-way is emitted only for cameras with an operator-configured expected direction; road speed remains unavailable until a camera is geometrically calibrated.
 - **[built] Real finding:** on the current **wide-angle traffic-overview** CSITMS cameras, plates are ~20–120 px (below the OCR floor of ~100 px clean width), so plate *reads* are near-zero on these feeds — a **source-camera resolution** limit, not a pipeline defect. Plate detection works; the pipeline is ready for ANPR-grade (zoomed) cameras in the full 50-camera set.
-- **[built] Placement (prototype):** central worker, round-robin over an active set, frame-sampled, daytime-seek into the 12-h files. **Production:** edge/regional GPU pools near the source (see SCALABILITY.md).
-- **Roadmap:** person/face detection, intrusion/loitering/crowd, visual re-ID.
+- **[built] Placement (prototype):** central worker, round-robin over an active set, frame-sampled at one synchronized source slot. **Production:** edge/regional GPU pools near the source (see SCALABILITY.md).
+- **Model extension point:** `VEHICLE_MODEL` + `VEHICLE_CLASS_MAP_JSON` accepts a validated Gujarat-specific model containing an `auto_rickshaw` class. The stock COCO model does not contain that class and the UI does not pretend otherwise.
+- **Roadmap:** validate/fine-tune the auto-rickshaw model, person/face detection, intrusion/loitering/crowd, visual re-ID, and calibrated road speed.
 
 ### 6.5 Event bus **[built]**
 - **[built]** Redis Streams in the prototype (detections published on ingest). **Production:** **MQTT** edge→regional + **Redpanda** (Kafka API) regional+core, partitioned by `region × camera-group`, RF=3 — identical producer/consumer interface. Sizing in [SCALABILITY.md §2](SCALABILITY.md).
@@ -147,7 +155,7 @@ Principle: **normalize at the edge of the platform, keep departments untouched.*
 
 ## 9. Video analytics approach (detail)
 
-**Pipeline [built]:** frame sample (daytime-seek) → overlay-mask → YOLOv8 vehicle detect (+colour) → dedicated YOLO plate detect → EasyOCR (upscaled crop, Indian-plate regex + confidence gate) → emit `detection_event {camera_id, geo, ts, vehicle_type, colour, plate?, snapshot}` → publish to bus + index.
+**Pipeline [built]:** synchronized frame sample → overlay-mask → YOLOv8 vehicle detect (+colour) → per-camera ByteTrack → dedicated YOLO plate detect → EasyOCR (upscaled crop, Indian-plate regex + confidence gate) → track persistence + majority vote → one `detection_event {track_uuid, camera_id, geo, source_ts, first_seen, last_seen, vehicle_type, colour, plate?, motion, snapshot}` → publish to bus + index.
 
 ### Tracking a *single designated vehicle* across a path
 The scored test provides a **vehicle number**. Two matching keys, used in priority:
@@ -256,9 +264,9 @@ To onboard each department we need (to be collected via a standard intake form):
 ### 19.1 Four-model coverage
 | Model | Status | What's built |
 |---|---|---|
-| **1 — Registry & GIS** (mandatory) | ✅ Full | registry, GIS map, onboarding, health, gap-analysis, RBAC search + audit |
-| **2 — Unified Viewing & Selective Analytics** | ✅ Substantial | unified video wall, per-vehicle metadata, camera-wise index, searchable movement, event tagging, alerts (ANPR reads resolution-limited) |
-| **3 — VMS Federation & Middleware** | ✅ Built (spine) | adapter framework, stream gateway, event bus, cross-camera correlation, unified dashboard (one live source federated; more = more adapters) |
+| **1 — Registry & GIS** (mandatory) | ✅ Feature-complete | registry, GIS, bulk/manual/API onboarding, health, maintenance lifecycle, ageing/coverage gaps, RBAC, export + audit |
+| **2 — Unified Viewing & Selective Analytics** | ◑ Code-complete; proof pending | registered-camera gateway, video wall, tracked evidence, indexing, search, alerts and ANPR consensus; official proof needs a real second source and a readable plate sequence |
+| **3 — VMS Federation & Middleware** | ◑ Code-complete; proof pending | CSITMS + configurable RTSP adapters, canonical provenance, gateway, Redis event bus, correlation dashboard/report; official two-system proof needs a real second VMS/RTSP feed |
 | **4 — Central VMS & AI Platform** | ◑ Partial | AI analytics + tracking + integration-readiness + RBAC built; tiered storage / DR / GPU-pool / 80k scale is design |
 
 ### 19.2 Architecture-principles compliance

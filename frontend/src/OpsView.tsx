@@ -2,19 +2,23 @@ import { useEffect, useState } from "react";
 import {
   fetchAudit,
   fetchGapAnalysis,
+  fetchFederationReport,
   type AuditEntry,
   type GapAnalysis,
+  type FederationReport,
 } from "./api";
 import { districtColor } from "./theme";
 
 export default function OpsView() {
   const [gap, setGap] = useState<GapAnalysis | null>(null);
   const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [federation, setFederation] = useState<FederationReport | null>(null);
 
   useEffect(() => {
     const load = () => {
       fetchGapAnalysis().then(setGap).catch(() => {});
       fetchAudit().then(setAudit).catch(() => {});
+      fetchFederationReport().then(setFederation).catch(() => {});
     };
     load();
     const t = setInterval(load, 4000);
@@ -43,9 +47,14 @@ export default function OpsView() {
                 <small>Offline</small>
               </div>
               <div className="ops-kpi">
-                <b>{gap.districts.length}</b>
-                <small>Districts</small>
+                <b>{gap.lifecycle_completeness_pct}%</b>
+                <small>Asset records complete</small>
               </div>
+            </div>
+
+            <div className="ops-sub">Asset lifecycle</div>
+            <div className="hint">
+              {gap.maintenance_due} maintenance due · {gap.end_of_life} at end of life · {gap.incomplete_asset_records} records need make/model/install metadata
             </div>
 
             {gap.offline_cameras.length > 0 && (
@@ -102,6 +111,30 @@ export default function OpsView() {
       </div>
 
       <div className="ops-col">
+        <div className="section-title" style={{ marginTop: 0 }}>
+          Federation · Model 3
+        </div>
+        {federation && (
+          <>
+            <div className="hint">
+              {federation.adapter_system_count} adapter-backed source system{federation.adapter_system_count === 1 ? "" : "s"} · {federation.camera_count} normalized cameras · {federation.event_count} tracked events
+            </div>
+            {federation.demonstration_gap && (
+              <div className="hint" style={{ color: "#f59e0b" }}>
+                Demonstration gap: {federation.demonstration_gap}
+              </div>
+            )}
+            <table className="ops-table">
+              <thead><tr><th>Source</th><th>Cameras</th><th>Online</th><th>Events</th></tr></thead>
+              <tbody>{federation.systems.map((system) => (
+                <tr key={system.source_system}>
+                  <td>{system.source_system}<small style={{ display: "block" }}>{system.source_adapter}</small></td>
+                  <td>{system.cameras}</td><td>{system.online}</td><td>{system.events}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </>
+        )}
         <div className="section-title" style={{ marginTop: 0 }}>
           Audit Log · tamper-evident trail
         </div>

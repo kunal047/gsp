@@ -3,6 +3,7 @@ import maplibregl from "maplibre-gl";
 import {
   fetchTrack,
   fetchTrackVehicle,
+  exportDetectionReport,
   snapshotUrl,
   type PathStop,
   type TrackResult,
@@ -178,6 +179,21 @@ export default function TrackingView() {
     }
   };
 
+  const exportReport = async () => {
+    setNote("");
+    try {
+      const params = sv
+        ? { detection_ids: sv.path.map((stop) => stop.id).join(",") }
+        : plate.trim()
+          ? { plate: plate.trim() }
+          : { ...(vtype ? { vehicle_type: vtype } : {}), ...(color ? { color } : {}) };
+      await exportDetectionReport(params);
+      setNote("Timestamped movement evidence exported as CSV and added to the audit trail.");
+    } catch {
+      setNote("Movement report export failed.");
+    }
+  };
+
   // Unified map points (single-vehicle stops mapped to the PathStop shape).
   const mapPts: PathStop[] = sv
     ? sv.path.map((s) => ({
@@ -263,6 +279,11 @@ export default function TrackingView() {
             <b>{result.count}</b> detections · <b>{result.cameras}</b> cameras ·{" "}
             <span className="mode">{result.mode} match</span>
           </div>
+        )}
+        {(sv || result) && (
+          <button className="track-export" onClick={exportReport}>
+            Export movement report
+          </button>
         )}
       </div>
 

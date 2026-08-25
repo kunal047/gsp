@@ -2,7 +2,7 @@
 
 > **Project codename:** Sentinel (working name: **"Netra"** — unified CCTV intelligence platform)
 > **Owner:** Kunal
-> **Last updated:** 2026-08-17
+> **Last updated:** 2026-08-21
 > **Source of truth:** https://sentinel.gujarat.gov.in (`/`, `/about`, `/phases`, `/problems`, `/schedule`, `/faqs`)
 
 ---
@@ -16,12 +16,11 @@ Gujarat Police runs a real-deployment innovation challenge (₹37 L pool, partne
 | Date | Milestone |
 |---|---|
 | 4 Aug 2026 | Registration opened |
-| **29 Aug 2026** | **Last date to apply** (register before this to unlock dataset/feeds) |
-| 30 Aug 2026 | Shortlisting announced |
-| **1–2 Sep 2026** | Hackathon event @ i-Hub Gujarat |
-| 2 Sep 2026 | Results & prizes |
+| **7 Sep 2026** | **Last date to apply** |
+| **10–11 Sep 2026** | Hackathon event @ i-Hub Gujarat |
+| 11 Sep 2026 | Results & prizes |
 
-**Today: 17 Aug 2026 → ~12 days to registration deadline, ~15 days to event.** Register ASAP; dataset/stream endpoints unlock only after registration.
+**As of 21 Aug 2026: 17 days to registration deadline and 20 days to the event.**
 
 ### Rules that shape everything
 - **Model 1 (Registry + GIS) is COMPULSORY** and must be combined with ≥1 other model.
@@ -43,11 +42,14 @@ The 7 official evaluation areas (FAQ #36), in priority order for our effort:
 
 > Design principle: **build the vehicle-tracking vertical slice end-to-end first**; everything else (extra analytics, polish, bonus features) layers on top.
 
-## 4. Chosen architecture: Hybrid = Model 1 + Model 3 + selective Model 4
+## 4. Chosen architecture: Hybrid = Models 1 + 2 + 3, selective AI
 
 - **Model 1 (mandatory):** Centralised CCTV Registry & GIS map — camera metadata, health, gap analysis.
+- **Model 2:** Unified viewing and metadata analytics — browser-safe streams,
+  video wall, indexed detections, ANPR/search and evidence-backed alerts.
 - **Model 3 (federation/middleware):** Adapter/connector layer + unified API/stream gateway + event bus. This is the "no rip-replace, vendor-neutral" thesis and earns the *innovative hybrid* bonus (#38).
-- **Model 4 (selective):** Central AI analytics (ANPR, vehicle/person detection, cross-camera tracking) — run centrally in the sandbox, designed to push to edge at statewide scale.
+- **Selective AI:** ANPR, vehicle detection and cross-camera tracking run
+  centrally in the sandbox, with an edge-ready statewide design.
 
 **Why this combo wins:** compulsory Model 1 satisfied; Model 3 answers heterogeneity + scalability without touching departments' infra; Model 4 analytics delivers the scored test case. The hybrid framing is explicitly rewarded.
 
@@ -109,11 +111,12 @@ Bonus (if time, #38): re-ID cross-camera matching, edge/bandwidth optimization, 
 
 | Window | Focus |
 |---|---|
-| **Now → Aug 20** | Register (unlock dataset); S0 scaffold; S1 Registry+GIS; start HLD skeleton |
-| **Aug 20 → Aug 25** | S2 stream gateway + video wall; S3 ANPR/detection; draft deck |
-| **Aug 25 → Aug 29** | S4 vehicle tracking (core); S5 alerts/DB mock; **register before 29 Aug** |
-| **Aug 29 → Sep 1** | S6 security/ops; S7 swap to govt feeds; finalize HLD + deck; record demo videos |
-| **Sep 1–2** | Event: live test case, present |
+| **Completed by Aug 21** | Registry/GIS, government-feed adapter, video wall, analytics, tracking, watchlist alerts, health/RBAC/audit, registry onboarding and CSV evidence exports |
+| **Aug 22 → Aug 28** | Improve ANPR yield; add own-feed upload/recorded-video demo path; harden alert evidence quality |
+| **Aug 29 → Sep 4** | Load test, API documentation, HLD/deck, complete cost model, security hardening |
+| **Sep 5 → Sep 7** | Finalize submission, hosted demo and credentials; **register by 7 Sep** |
+| **Sep 8 → Sep 9** | Full timed rehearsal, fault-injection run, record both 2–3 minute demo videos |
+| **Sep 10–11** | Event: onboard supplied feeds, execute designated-vehicle test, export report, present |
 
 ## 9. Open decisions (need Kunal's input)
 
@@ -136,10 +139,10 @@ Bonus (if time, #38): re-ID cross-camera matching, edge/bandwidth optimization, 
 
 ## 11. Definition of done (Phase 1 submission)
 
-- [ ] Registered before 29 Aug; dataset accessed.
-- [ ] Running platform: onboard feeds → view → ANPR → plate-search → route+timeline.
-- [ ] Mandatory Model 1 registry + GIS working.
-- [ ] Real ANPR output report (plates + timestamps) on govt feed.
+- [ ] Registered before 7 Sep; event access confirmed.
+- [x] Running platform: onboard feeds → view → analytics → search → route+timeline.
+- [x] Mandatory Model 1 registry + GIS with manual/CSV onboarding and export.
+- [x] Downloadable detection/movement report with plate, timestamp and location.
 - [ ] HLD doc complete (incl. 80k-camera scalability).
 - [ ] Solution deck complete.
 - [ ] Two demo videos recorded.

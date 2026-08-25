@@ -1,10 +1,13 @@
 """Real camera health monitor.
 
-Periodically probes each camera's actual stream endpoint and updates its
-health_status (online / degraded / offline) from the true HTTP response. On an
-online→offline transition it raises a real 'feed_offline' alert. No simulation:
-cameras 6 & 22 (HTTP 500 at source) are detected as genuinely offline.
+Liveness is taken from the provider's authoritative per-camera state
+(`/api/cameras/{id}/state` -> `status`), not from pulling media. The provider
+serves a live HLS edge; the legacy progressive `/stream/{id}` MP4 is a ~1.3 GB
+non-faststart file that intermittently stalls, so probing it produced false
+offline flapping. On a real online->offline transition we raise a feed_offline
+alert.
 """
+import json
 import os
 import threading
 import time
@@ -15,21 +18,42 @@ from . import models
 from .db import SessionLocal
 
 INTERVAL = int(os.getenv("HEALTH_INTERVAL", "90"))
-TIMEOUT = int(os.getenv("HEALTH_TIMEOUT", "8"))
+TIMEOUT = int(os.getenv("HEALTH_TIMEOUT", "10"))
 
 
-def probe(url: str) -> str:
-    req = urllib.request.Request(
-        url,
-        headers={"Range": "bytes=0-2048", "User-Agent": "netra/health"},
-    )
+def _state_url(cam) -> str | None:
+    base = (cam.source or "").rstrip("/")
+    if not base:
+        return None
+    provider_id = cam.camera_id.split("-")[-1].lstrip("0") or "0"
+    return f"{base}/api/cameras/{provider_id}/state"
+
+
+def probe(cam) -> str:
+    if cam.source_adapter != "csitms_api":
+        if not cam.stream_url:
+            return "degraded"
+        request = urllib.request.Request(
+            cam.stream_url,
+            headers={"Range": "bytes=0-2048", "User-Agent": "netra/health"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+                return "online" if response.status in (200, 206) else "degraded"
+        except urllib.error.HTTPError as error:
+            return "offline" if error.code >= 500 else "degraded"
+        except Exception:
+            return "degraded"
+    url = _state_url(cam)
+    if not url:
+        return "degraded"
+    req = urllib.request.Request(url, headers={"User-Agent": "netra/health"})
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-            return "online" if r.status in (200, 206) else "degraded"
-    except urllib.error.HTTPError as e:
-        return "offline" if e.code >= 500 else "degraded"
+            data = json.load(r)
+        return "online" if data.get("status") == "live" else "offline"
     except Exception:
-        return "offline"
+        return "degraded"  # transient network issue, not a confirmed outage
 
 
 def _raise_offline_alert(db, cam):
@@ -39,6 +63,7 @@ def _raise_offline_alert(db, cam):
             camera_id=cam.camera_id,
             camera_name=cam.name,
             city=cam.city,
+            source_system=cam.source_system,
             lat=cam.lat,
             lng=cam.lng,
             reason=f"Camera feed offline — {cam.name}",
@@ -54,9 +79,7 @@ def run_once():
     try:
         cams = db.query(models.Camera).all()
         for c in cams:
-            if not c.stream_url:
-                continue
-            status = probe(c.stream_url)
+            status = probe(c)
             if status != c.health_status:
                 was = c.health_status
                 c.health_status = status

@@ -1,7 +1,6 @@
-const API_BASE =
-  (import.meta as any).env?.VITE_API_BASE || "http://localhost:8000";
-const GATEWAY_BASE =
-  (import.meta as any).env?.VITE_GATEWAY_BASE || "http://localhost:8081";
+const env = (import.meta as any).env || {};
+const API_BASE = env.VITE_API_BASE || (env.PROD ? "/server" : "http://localhost:8000");
+const GATEWAY_BASE = env.VITE_GATEWAY_BASE || (env.PROD ? "/gateway" : "http://localhost:8081");
 
 // --- RBAC principal (set by the role switcher; sent on every request) ---
 export interface Principal {
@@ -36,6 +35,28 @@ async function apiPost(path: string, body?: any) {
     body: body ? JSON.stringify(body) : undefined,
   });
 }
+async function apiDelete(path: string) {
+  return fetch(`${API_BASE}${path}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+}
+
+async function downloadApi(path: string, fallbackName: string): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`Export failed (${res.status})`);
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^";]+)"?/i);
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = match?.[1] || fallbackName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(href);
+}
 
 // Browsers can play MP4/WebM (h264) directly. Other containers (MKV/AVI) are
 // routed through the ffmpeg stream gateway: MKV(h264) is remuxed (copy), AVI /
@@ -46,10 +67,15 @@ export function streamSrc(cam: {
   camera_id: string;
 }): string {
   const c = (cam.container || "").toLowerCase();
-  if (c === "mp4" || c === "webm") return cam.stream_url;
-  const id = cam.camera_id.split("-").pop();
   const mode = c === "mkv" ? "copy" : "x264";
-  return `${GATEWAY_BASE}/gateway/stream/${id}?c=${mode}`;
+  return `${GATEWAY_BASE}/gateway/camera/${encodeURIComponent(cam.camera_id)}/stream?c=${mode}`;
+}
+
+// Server-side snapshot (one refreshed JPEG per camera). Works for every codec
+// incl. H.265, so all cameras can be viewed at once without decoding N live
+// streams in the browser.
+export function cameraSnapshotUrl(cam: { camera_id: string }): string {
+  return `${GATEWAY_BASE}/gateway/camera/${encodeURIComponent(cam.camera_id)}/snapshot`;
 }
 
 export interface Camera {
@@ -80,6 +106,15 @@ export interface Camera {
   container: string;
   delivery: string;
   source: string;
+  source_system: string;
+  source_adapter: string;
+  external_id: string;
+  installed_at: string | null;
+  maintenance_status: string;
+  last_service_at: string | null;
+  next_service_at: string | null;
+  eol_at: string | null;
+  maintenance_notes: string | null;
   dept_inferred: boolean;
 }
 
@@ -89,7 +124,58 @@ export interface Stats {
   by_status: Record<string, number>;
   by_type: Record<string, number>;
   by_city: Record<string, number>;
+  by_source_system: Record<string, number>;
   analytics_enabled: number;
+}
+
+export type CameraCreate = Partial<Omit<Camera, "id">> & {
+  camera_id: string;
+};
+
+export interface BulkResult {
+  inserted: number;
+  skipped: number;
+  total: number;
+}
+
+export async function createCamera(camera: CameraCreate): Promise<Camera> {
+  const res = await apiPost(`/api/cameras`, camera);
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `Camera onboarding failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function bulkCreateCameras(
+  cameras: CameraCreate[]
+): Promise<BulkResult> {
+  const res = await apiPost(`/api/cameras/bulk`, cameras);
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `Bulk onboarding failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function exportCameraRegistry(
+  params: Record<string, string> = {}
+): Promise<void> {
+  const qs = new URLSearchParams(params).toString();
+  return downloadApi(
+    `/api/reports/cameras.csv${qs ? "?" + qs : ""}`,
+    "netra-camera-registry.csv"
+  );
+}
+
+export async function exportDetectionReport(
+  params: Record<string, string>
+): Promise<void> {
+  const qs = new URLSearchParams(params).toString();
+  return downloadApi(
+    `/api/reports/detections.csv?${qs}`,
+    "netra-movement-evidence.csv"
+  );
 }
 
 export async function fetchCameras(
@@ -108,6 +194,10 @@ export interface GapAnalysis {
   online: number;
   offline: number;
   coverage_pct: number;
+  maintenance_due: number;
+  end_of_life: number;
+  incomplete_asset_records: number;
+  lifecycle_completeness_pct: number;
   thin_coverage: string[];
   districts: {
     city: string;
@@ -117,9 +207,38 @@ export interface GapAnalysis {
     offline: number;
   }[];
   offline_cameras: { camera_id: string; name: string; city: string; site: string }[];
+  maintenance_cameras: {
+    camera_id: string;
+    name: string;
+    city: string;
+    maintenance_status: string;
+    next_service_at: string | null;
+    eol_at: string | null;
+  }[];
 }
 export async function fetchGapAnalysis(): Promise<GapAnalysis> {
   return apiGet(`/api/gap-analysis`);
+}
+
+export interface FederationReport {
+  systems: {
+    source_system: string;
+    source_adapter: string;
+    cameras: number;
+    online: number;
+    analytics_enabled: number;
+    events: number;
+    active_cameras: number;
+  }[];
+  system_count: number;
+  adapter_system_count: number;
+  camera_count: number;
+  event_count: number;
+  federated: boolean;
+  demonstration_gap: string | null;
+}
+export async function fetchFederationReport(): Promise<FederationReport> {
+  return apiGet(`/api/reports/federation`);
 }
 
 export interface AuditEntry {
@@ -139,6 +258,14 @@ export interface Health {
   camera_source: string | null;
   cameras: number;
   ingest_error: string | null;
+  adapters: {
+    key: string;
+    source_system: string;
+    status: string;
+    discovered: number;
+    inserted: number;
+    error?: string;
+  }[];
 }
 
 export async function fetchHealth(): Promise<Health> {
@@ -156,16 +283,33 @@ export interface Detection {
   camera_id: string;
   camera_name: string;
   city: string;
+  source_system: string | null;
+  source_adapter: string | null;
   event_type: string; // anpr | vehicle
   plate: string | null;
   plate_norm: string | null;
   vehicle_type: string | null;
+  color: string | null;
   confidence: number;
   plate_confidence: number | null;
+  track_uuid: string | null;
+  track_id: number | null;
+  track_hits: number;
+  class_confidence: number | null;
+  color_confidence: number | null;
   snapshot: string | null;
   lat: number | null;
   lng: number | null;
+  first_seen: string | null;
+  last_seen: string | null;
   ts: string | null;
+  ingested_at: string | null;
+  time_source: string;
+  direction: string | null;
+  dwell_seconds: number | null;
+  motion_px_per_second: number | null;
+  stopped: boolean;
+  wrong_way: boolean | null;
 }
 
 export interface DetStats {
@@ -195,6 +339,8 @@ export interface RoutePoint {
   camera_id: string;
   camera_name: string;
   city: string;
+  source_system: string | null;
+  source_adapter: string | null;
   lat: number;
   lng: number;
   ts: string;
@@ -202,12 +348,25 @@ export interface RoutePoint {
   vehicle_type: string | null;
   color: string | null;
   snapshot: string | null;
+  track_uuid: string | null;
+  track_id: number | null;
+  track_hits: number;
+  class_confidence: number | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  time_source: string;
+  direction: string | null;
+  dwell_seconds: number | null;
+  motion_px_per_second: number | null;
+  stopped: boolean;
+  wrong_way: boolean | null;
 }
 
 export interface PathStop {
   camera_id: string;
   camera_name: string;
   city: string;
+  source_system: string | null;
   lat: number;
   lng: number;
   first_seen: string;
@@ -237,6 +396,7 @@ export interface VehicleStop {
   camera_id: string;
   camera_name: string;
   city: string;
+  source_system: string | null;
   lat: number;
   lng: number;
   ts: string;
@@ -270,6 +430,8 @@ export interface Alert {
   watchlist_category: string | null;
   case_ref: string | null;
   matched_on: string | null;
+  match_confidence: number | null;
+  detection_id: number | null;
   camera_id: string;
   camera_name: string;
   city: string;
@@ -281,21 +443,87 @@ export interface Alert {
   vehicle_count: number | null;
   reason: string;
   source: string;
+  source_system: string | null;
   severity: string;
   snapshot: string | null;
   acknowledged: boolean;
   ts: string;
+  ingested_at: string;
+  time_source: string;
+}
+
+export interface GroupedAlert extends Alert {
+  occurrence_count: number;
+  first_ts: string;
+}
+
+export function groupAlerts(
+  alerts: Alert[],
+  windowSeconds = 300
+): GroupedAlert[] {
+  const groups: GroupedAlert[] = [];
+  const latestByKey = new Map<string, GroupedAlert>();
+  for (const alert of alerts) {
+    const key = [alert.kind, alert.camera_id, alert.case_ref || "", alert.matched_on || ""].join("|");
+    const existing = latestByKey.get(key);
+    const withinWindow = existing &&
+      Math.abs(new Date(existing.ts).getTime() - new Date(alert.ts).getTime()) <= windowSeconds * 1000;
+    if (existing && withinWindow) {
+      existing.occurrence_count += 1;
+      existing.first_ts = alert.ts;
+      continue;
+    }
+    const grouped = { ...alert, occurrence_count: 1, first_ts: alert.ts };
+    groups.push(grouped);
+    latestByKey.set(key, grouped);
+  }
+  return groups;
+}
+
+export interface AlertEvidence {
+  alert_id: number;
+  alert_ts: string;
+  window_minutes: number;
+  camera: Pick<Camera, "camera_id" | "name" | "stream_url" | "container" | "health_status"> | null;
+  timeline: {
+    id: number;
+    ts: string;
+    event_type: string;
+    plate: string | null;
+    vehicle_type: string | null;
+    color: string | null;
+    confidence: number;
+    track_id: number | null;
+    track_hits: number;
+    class_confidence: number | null;
+    time_source: string;
+    direction: string | null;
+    dwell_seconds: number | null;
+    stopped: boolean;
+    wrong_way: boolean | null;
+    snapshot: string | null;
+    is_alert_detection: boolean;
+  }[];
+}
+
+export async function fetchAlertEvidence(id: number): Promise<AlertEvidence> {
+  return apiGet(`/api/alerts/${id}/evidence`);
 }
 
 export interface WatchItem {
   id: number;
+  category: string;
+  label: string;
   kind: string;
   plate_norm: string | null;
   vehicle_type: string | null;
   color: string | null;
+  case_ref: string | null;
   reason: string;
   source: string;
   severity: string;
+  min_confidence: number;
+  min_track_hits: number;
   active: boolean;
 }
 
@@ -318,11 +546,19 @@ export async function ackAlert(id: number): Promise<boolean> {
   return res.ok; // false if forbidden (viewer role)
 }
 
-export async function fetchWatchlist(): Promise<WatchItem[]> {
-  return apiGet(`/api/watchlist`);
+export async function fetchWatchlist(
+  params: Record<string, string> = {}
+): Promise<WatchItem[]> {
+  const qs = new URLSearchParams(params).toString();
+  return apiGet(`/api/watchlist${qs ? "?" + qs : ""}`);
 }
 
-export async function addWatch(item: Record<string, string>): Promise<boolean> {
+export async function addWatch(item: Record<string, string | number>): Promise<boolean> {
   const res = await apiPost(`/api/watchlist`, item);
+  return res.ok;
+}
+
+export async function deleteWatch(id: number): Promise<boolean> {
+  const res = await apiDelete(`/api/watchlist/${id}`);
   return res.ok;
 }

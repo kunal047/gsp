@@ -1,12 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import type { Camera } from "./api";
-import { streamSrc } from "./api";
+import { cameraSnapshotUrl } from "./api";
 import { districtColor } from "./theme";
 
-// Lazy-play: only tiles scrolled into view attach a stream; off-screen tiles
-// release the connection. Keeps concurrent streams within the browser's
-// ~6-per-host limit even with all 31 cameras rendered at once.
-function VideoTile({
+// Refresh interval for each tile's snapshot. The gateway caches frames for a
+// few seconds, so this is mostly served from cache with periodic re-grabs.
+const REFRESH_MS = Number(
+  (import.meta as any).env?.VITE_WALL_REFRESH_MS || 8000
+);
+
+// A snapshot tile: shows a periodically-refreshed still for every camera (any
+// codec, incl. H.265) so the whole grid is viewable at once. Click for full
+// live video. Frames are double-buffered (preload then swap) to avoid flicker,
+// and only on-screen tiles fetch.
+function SnapshotTile({
   cam,
   onSelect,
   active,
@@ -16,63 +23,68 @@ function VideoTile({
   active: boolean;
 }) {
   const wrap = useRef<HTMLDivElement>(null);
-  const video = useRef<HTMLVideoElement>(null);
   const [visible, setVisible] = useState(false);
-  const [err, setErr] = useState(false);
+  const [shownSrc, setShownSrc] = useState("");
   const [ready, setReady] = useState(false);
+  const [err, setErr] = useState(false);
+  const isHevc = ["hevc", "h265"].includes((cam.codec || "").toLowerCase());
 
   useEffect(() => {
     const el = wrap.current;
     if (!el) return;
     const io = new IntersectionObserver(
       ([e]) => setVisible(e.isIntersecting),
-      { rootMargin: "150px", threshold: 0.1 }
+      { rootMargin: "200px", threshold: 0.05 }
     );
     io.observe(el);
     return () => io.disconnect();
   }, []);
 
   useEffect(() => {
-    const v = video.current;
-    if (!v) return;
-    if (visible && active && !err) {
-      v.src = streamSrc(cam);
-      v.play().catch(() => {});
-    } else {
-      v.pause();
-      v.removeAttribute("src");
-      v.load();
-      setReady(false);
-    }
-  }, [visible, active, err]);
+    if (!visible || !active) return;
+    let alive = true;
+    const load = () => {
+      const url = `${cameraSnapshotUrl(cam)}?t=${Date.now()}`;
+      const img = new Image();
+      img.onload = () => {
+        if (!alive) return;
+        setShownSrc(url);
+        setReady(true);
+        setErr(false);
+      };
+      img.onerror = () => alive && setErr(true);
+      img.src = url;
+    };
+    const t0 = setTimeout(load, Math.random() * 2000); // stagger initial burst
+    const iv = setInterval(load, REFRESH_MS);
+    return () => {
+      alive = false;
+      clearTimeout(t0);
+      clearInterval(iv);
+    };
+  }, [visible, active, cam.camera_id]);
 
   return (
     <div className="tile" ref={wrap} onClick={() => onSelect(cam)}>
       <div className="tile-video">
-        <video
-          ref={video}
-          muted
-          loop
-          playsInline
-          preload="none"
-          onCanPlay={() => setReady(true)}
-          onError={() => setErr(true)}
-          style={{ display: err ? "none" : "block" }}
-        />
+        {shownSrc && !err && (
+          <img className="tile-snap" src={shownSrc} alt={cam.name} />
+        )}
         {err && (
           <div className="tile-ph">
             <div className="ph-num">{cam.camera_id.split("-").pop()}</div>
-            <div className="ph-note">stream unavailable</div>
+            <div className="ph-note">snapshot unavailable</div>
           </div>
         )}
         <div className="tile-badges">
           <span className="live-badge">
             <span className="live-dot" /> LIVE
           </span>
+          {isHevc && <span className="codec-badge">H.265</span>}
           {cam.analytics_enabled && <span className="anpr-badge">ANPR</span>}
         </div>
-        {visible && active && !err && !ready && (
-          <div className="tile-loading">connecting…</div>
+        {visible && active && !ready && !err && (
+          <div className="tile-loading">loading…</div>
         )}
       </div>
       <div className="tile-meta">
@@ -98,14 +110,14 @@ export default function VideoWall({
   return (
     <div className="wall">
       <div className="wall-bar">
-        <span>{cameras.length} live feeds · scroll to view all</span>
+        <span>{cameras.length} cameras · live snapshots (all feeds)</span>
         <span className="dim">
-          on-screen tiles stream · off-screen paused
+          refreshes every few seconds · click a tile for full live video
         </span>
       </div>
       <div className="wall-grid">
         {cameras.map((c) => (
-          <VideoTile
+          <SnapshotTile
             key={c.camera_id}
             cam={c}
             onSelect={onSelect}

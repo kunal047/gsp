@@ -1,12 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import {
   ackAlert,
   addWatch,
+  fetchAlertEvidence,
   fetchAlerts,
   fetchWatchlist,
+  groupAlerts,
   snapshotUrl,
+  streamSrc,
   type Alert,
+  type AlertEvidence,
   type WatchItem,
 } from "./api";
 
@@ -81,12 +85,99 @@ function AlertMap({ alerts }: { alerts: Alert[] }) {
   return <div className="alerts-map" ref={container} />;
 }
 
+function EvidenceViewer({ alert, onClose }: { alert: Alert; onClose: () => void }) {
+  const [evidence, setEvidence] = useState<AlertEvidence | null>(null);
+  const [selectedSnapshot, setSelectedSnapshot] = useState(alert.snapshot);
+  const [mode, setMode] = useState<"evidence" | "live">("evidence");
+  const [imageSize, setImageSize] = useState<[number, number] | null>(null);
+
+  useEffect(() => {
+    fetchAlertEvidence(alert.id).then(setEvidence).catch(() => {});
+  }, [alert.id]);
+
+  const selectedUrl = snapshotUrl(selectedSnapshot);
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="evidence-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="evidence-head">
+          <div>
+            <span className={"kind-badge k-" + alert.kind}>{KIND_LABEL[alert.kind] || alert.kind}</span>
+            <strong>{alert.reason}</strong>
+            <small>
+              {alert.camera_name} · {alert.city} · {new Date(alert.ts).toLocaleString()}
+              {alert.match_confidence != null ? ` · match ${(alert.match_confidence * 100).toFixed(0)}%` : ""}
+              {` · ${alert.time_source.replace("_", " ")} time`}
+            </small>
+          </div>
+          <button onClick={onClose}>✕</button>
+        </div>
+        <div className="evidence-tabs">
+          <button className={mode === "evidence" ? "active" : ""} onClick={() => setMode("evidence")}>Event evidence</button>
+          <button className={mode === "live" ? "active" : ""} onClick={() => setMode("live")}>Live camera</button>
+          <span>± {evidence?.window_minutes || 5} minute timeline</span>
+        </div>
+        <div className="evidence-stage">
+          {mode === "live" && evidence?.camera ? (
+            <video src={streamSrc(evidence.camera)} autoPlay muted controls playsInline />
+          ) : selectedUrl ? (
+            <img
+              className={imageSize && Math.max(...imageSize) < 320 ? "low-res-evidence" : ""}
+              src={selectedUrl}
+              alt="Alert evidence"
+              onLoad={(event) => setImageSize([event.currentTarget.naturalWidth, event.currentTarget.naturalHeight])}
+            />
+          ) : (
+            <div className="evidence-empty">No image was retained for this event.<small>Metadata and nearby camera detections remain available below.</small></div>
+          )}
+          <div className="evidence-stamp">
+            {mode === "live"
+              ? "LIVE · not recorded"
+              : imageSize && Math.max(...imageSize) < 320
+                ? `DETECTION CROP · LOW RESOLUTION · ${imageSize[0]}×${imageSize[1]}`
+                : "EVENT CONTEXT FRAME"}
+          </div>
+        </div>
+        <div className="evidence-timeline">
+          <div className="timeline-axis" />
+          {!evidence && <div className="hint">Loading nearby detections…</div>}
+          {evidence?.timeline.length === 0 && <div className="hint">No nearby detections in this camera window.</div>}
+          {evidence?.timeline.map((event) => {
+            const thumb = snapshotUrl(event.snapshot);
+            return (
+              <button
+                key={event.id}
+                className={"evidence-event" + (event.is_alert_detection ? " alert-event" : "")}
+                onClick={() => { if (event.snapshot) { setImageSize(null); setSelectedSnapshot(event.snapshot); setMode("evidence"); } }}
+              >
+                <span className="timeline-dot" />
+                <span className="timeline-time">{new Date(event.ts).toLocaleTimeString([], { hour12: false })}</span>
+                {thumb ? <img src={thumb} alt="" /> : <span className="timeline-placeholder">{event.vehicle_type?.[0] || "·"}</span>}
+                <strong>{event.plate || `${event.color || ""} ${event.vehicle_type || "object"}`.trim()}</strong>
+                <small>
+                  Track {event.track_id ?? "legacy"} · {event.track_hits} observations
+                  {event.direction ? ` · ${event.direction}` : ""}
+                </small>
+                {event.is_alert_detection && <small>Alert match</small>}
+              </button>
+            );
+          })}
+        </div>
+        <div className="evidence-foot">
+          Video remains at the source VMS. This view shows retained event evidence and the current federated stream.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AlertsView() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [watch, setWatch] = useState<WatchItem[]>([]);
   const [vtype, setVtype] = useState("");
   const [color, setColor] = useState("");
   const [reason, setReason] = useState("");
+  const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
+  const groupedAlerts = useMemo(() => groupAlerts(alerts), [alerts]);
 
   const load = async () => {
     try {
@@ -164,19 +255,20 @@ export default function AlertsView() {
         </div>
 
         <div className="alerts-list">
-          {alerts.length === 0 && (
+          {groupedAlerts.length === 0 && (
             <div className="hint" style={{ padding: 12 }}>
               No alerts yet. When a detection matches the watchlist, a real-time
               alert appears here.
             </div>
           )}
-          {alerts.map((a) => {
+          {groupedAlerts.map((a) => {
             const snap = snapshotUrl(a.snapshot);
             return (
               <div
                 key={a.id}
                 className={"alert-row" + (a.acknowledged ? " acked" : "")}
                 style={{ borderLeftColor: SEV[a.severity] }}
+                onClick={() => setSelectedAlert(a)}
               >
                 <div className="alert-thumb">
                   {snap ? <img src={snap} alt="" /> : <div className="det-noimg">!</div>}
@@ -195,13 +287,17 @@ export default function AlertsView() {
                         `${a.color || ""} ${a.vehicle_type || ""}`.trim() +
                           " · ")}
                     {a.camera_name} · {a.city}
+                    {a.match_confidence != null && ` · ${(a.match_confidence * 100).toFixed(0)}% match`}
                   </div>
                   <div className="alert-time">
                     {new Date(a.ts).toLocaleTimeString([], { hour12: false })}
+                    {a.occurrence_count > 1 && (
+                      <span className="occurrence-count">{a.occurrence_count} occurrences</span>
+                    )}
                   </div>
                 </div>
                 {!a.acknowledged ? (
-                  <button className="ack-btn" onClick={() => ack(a.id)}>
+                  <button className="ack-btn" onClick={(e) => { e.stopPropagation(); ack(a.id); }}>
                     ACK
                   </button>
                 ) : (
@@ -212,7 +308,8 @@ export default function AlertsView() {
           })}
         </div>
       </div>
-      <AlertMap alerts={alerts} />
+      <AlertMap alerts={groupedAlerts} />
+      {selectedAlert && <EvidenceViewer alert={selectedAlert} onClose={() => setSelectedAlert(null)} />}
     </div>
   );
 }
