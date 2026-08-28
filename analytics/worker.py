@@ -2,7 +2,7 @@
 
 Pulls real camera streams, runs the ANPR pipeline on sampled frames, and POSTs
 detections to the backend. Round-robins over an active set to bound CPU on the
-default (GPU-less) deployment — the statewide design pushes this to edge/regional
+default (GPU-less) deployment - the statewide design pushes this to edge/regional
 GPU pools (see SCALABILITY.md).
 """
 import base64
@@ -23,6 +23,11 @@ from anpr import ANPR  # noqa: E402
 from tracking import TrackLifecycle  # noqa: E402
 
 BACKEND = os.getenv("BACKEND_URL", "http://backend:8000")
+# Service token for the authenticated backend API (registry reads). The
+# detection-ingest endpoints are unauthenticated, but sending the header is
+# harmless there.
+BACKEND_TOKEN = os.getenv("BACKEND_TOKEN", "")
+AUTH_HEADERS = {"Authorization": f"Bearer {BACKEND_TOKEN}"} if BACKEND_TOKEN else {}
 MAX_STREAMS = int(os.getenv("MAX_STREAMS", "6"))
 SAMPLE_EVERY = float(os.getenv("SAMPLE_EVERY", "2.5"))
 GRAB_SKIP = int(os.getenv("GRAB_SKIP", "5"))
@@ -52,6 +57,7 @@ def get_cameras():
     r = requests.get(
         f"{BACKEND}/api/cameras",
         params={"analytics_enabled": "true"},
+        headers=AUTH_HEADERS,
         timeout=15,
     )
     r.raise_for_status()
@@ -148,7 +154,11 @@ def get_source_state(cam):
 
 
 def open_cap(url, seek_seconds=0):
-    cap = cv2.VideoCapture(url)
+    # Explicit FFmpeg backend for both RTSP (rtsp_transport;tcp already forced via
+    # OPENCV_FFMPEG_CAPTURE_OPTIONS) and HLS. Live RTSP is never seekable.
+    cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+    if url.startswith("rtsp://"):
+        return cap
     if seek_seconds > 0:
         cap.set(cv2.CAP_PROP_POS_MSEC, seek_seconds * 1000)
         ok = cap.grab()
@@ -182,6 +192,14 @@ def main():
     # so we no longer gate on container; just skip cameras the catalogue reports
     # as not live.
     playable = [c for c in cams if c.get("health_status") != "offline"]
+    # Independent RTSP feeds (and analytics-flagged cameras) take priority in the
+    # active set so the controlled ANPR source is always analysed.
+    playable.sort(
+        key=lambda c: (
+            not str(c.get("stream_url") or "").startswith("rtsp://"),
+            not c.get("analytics_enabled"),
+        )
+    )
     active = playable[:MAX_STREAMS]
     print(
         f"[worker] active cameras: {[c['camera_id'] for c in active]}",
@@ -196,6 +214,13 @@ def main():
         serves for playback; the media server exposes a synchronized HLS live
         edge instead. Returns (url, seek_seconds)."""
         cid = cam["camera_id"]
+        # Independent RTSP system (local MediaMTX or a whitelisted provider RTSP):
+        # consume the catalogue's rtsp:// URL directly as a live camera - no state
+        # API, no seek. Event timing falls back to the PTS-anchored clock.
+        stream_url = cam.get("stream_url") or ""
+        if stream_url.startswith("rtsp://"):
+            source_states[cid] = {}
+            return stream_url, 0.0
         state = get_source_state(cam)
         base = (cam.get("source") or "").rstrip("/")
         hls = state.get("hls_live_url")
@@ -292,7 +317,7 @@ def main():
             cid = c["camera_id"]
             cap = caps.get(cid)
             if cap is None or not cap.isOpened():
-                # exponential backoff — never reconnect in a tight loop
+                # exponential backoff - never reconnect in a tight loop
                 if time.monotonic() < next_retry_at.get(cid, 0.0):
                     continue
                 url, seek = resolve_media(c)
@@ -328,7 +353,7 @@ def main():
                 post_completed(c, lifecycle.flush_camera(cid), "source_clock")
                 anpr.reset_tracker(cid)
                 timestamp_anchors.pop(cid, None)
-                print(f"[worker] {cid} scene discontinuity — trackers reset", flush=True)
+                print(f"[worker] {cid} scene discontinuity - trackers reset", flush=True)
                 continue
             event_time, time_source = event_clock(cid, frame, media_seconds)
             completed = lifecycle.update(

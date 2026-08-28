@@ -27,9 +27,9 @@ export default function CameraModal({
     ["Codec", (cam.codec || "unknown") + (isHevc ? " (H.265)" : "")],
     ["Delivery", cam.delivery || "?"],
     ["Protocol", cam.protocol || "?"],
-    ["VMS", cam.vms_platform || "—"],
+    ["VMS", cam.vms_platform || "-"],
     ["Stream", cam.stream_url],
-    ["Source", cam.source || "—"],
+    ["Source", cam.source || "-"],
   ];
 
   let player;
@@ -43,7 +43,7 @@ export default function CameraModal({
           onError={() => setErr(true)}
         />
         <div className="modal-hevc-note">
-          H.265 feed — live snapshot shown (browsers can’t decode H.265).
+          H.265 feed - live snapshot shown (browsers can’t decode H.265).
           Full video is available over RTSP/WebRTC; analytics runs on this feed.
         </div>
       </div>
@@ -81,7 +81,7 @@ export default function CameraModal({
   } else {
     player = (
       <div className="tile-ph big">
-        Live preview unavailable in-browser — analytics still runs on this feed.
+        Live preview unavailable in-browser - analytics still runs on this feed.
       </div>
     );
   }

@@ -1,42 +1,44 @@
 # Netra Registry and Federation API
 
 The interactive OpenAPI specification is available at
-`http://localhost:8000/docs`. Requests may include `X-User`, `X-Role` and
-`X-Scope`; write operations require `state_admin` or an in-scope
-`district_officer`.
+`http://localhost:8000/docs`. Use `POST /api/auth/login` to obtain a signed JWT
+and send it as `Authorization: Bearer <token>`. Identity, role, and district
+scope are taken only from verified token claims; write operations require
+`state_admin` or an in-scope `district_officer`. `GET /api/auth/me` returns the
+verified current identity.
 
-## Model 1 — registry and asset lifecycle
+## Model 1 - registry and asset lifecycle
 
-- `GET /api/cameras` — filter by department, status, type, city, analytics flag,
+- `GET /api/cameras` - filter by department, status, type, city, analytics flag,
   source system or free-text query.
-- `POST /api/cameras` — manually onboard one camera.
-- `POST /api/cameras/bulk` — onboard a validated JSON/CSV-derived batch.
-- `PATCH /api/cameras/{camera_id}/lifecycle` — update installation, service,
+- `POST /api/cameras` - manually onboard one camera.
+- `POST /api/cameras/bulk` - onboard a validated JSON/CSV-derived batch.
+- `PATCH /api/cameras/{camera_id}/lifecycle` - update installation, service,
   maintenance, end-of-life and notes fields.
-- `GET /api/stats` — registry totals grouped by department, status, type, city
+- `GET /api/stats` - registry totals grouped by department, status, type, city
   and source system.
-- `GET /api/gap-analysis` — coverage, offline feeds, thin districts,
+- `GET /api/gap-analysis` - coverage, offline feeds, thin districts,
   maintenance due, EOL assets and metadata completeness.
-- `GET /api/reports/cameras.csv` — audited, spreadsheet-safe registry export.
+- `GET /api/reports/cameras.csv` - audited, spreadsheet-safe registry export.
 
-## Model 2 — viewing and searchable analytics
+## Model 2 - viewing and searchable analytics
 
-- `GET /gateway/camera/{camera_id}/snapshot` — codec-independent JPEG from a
+- `GET /gateway/camera/{camera_id}/snapshot` - codec-independent JPEG from a
   backend-registered source URL.
-- `GET /gateway/camera/{camera_id}/stream?c=copy|x264` — on-demand fragmented
+- `GET /gateway/camera/{camera_id}/stream?c=copy|x264` - on-demand fragmented
   MP4 relay/remux/transcode; the gateway never accepts arbitrary URLs.
-- `GET /api/detections` and `/api/detections/stats` — evidence-backed tracked
+- `GET /api/detections` and `/api/detections/stats` - evidence-backed tracked
   events only.
-- `GET /api/track` and `/api/track/vehicle` — plate or attribute movement
+- `GET /api/track` and `/api/track/vehicle` - plate or attribute movement
   history and space-time-gated route reconstruction.
-- `GET /api/reports/detections.csv` — timestamped movement-evidence export.
+- `GET /api/reports/detections.csv` - timestamped movement-evidence export.
 
-## Model 3 — adapters and federation
+## Model 3 - adapters and federation
 
-- `GET /api/adapters` — configured source adapters and persisted coverage.
-- `POST /api/ingest/adapters` — discover all configured systems independently;
+- `GET /api/adapters` - configured source adapters and persisted coverage.
+- `POST /api/ingest/adapters` - discover all configured systems independently;
   one unreachable system does not hide healthy systems.
-- `GET /api/reports/federation` — per-system cameras, online feeds, analytics
+- `GET /api/reports/federation` - per-system cameras, online feeds, analytics
   coverage and events. `federated=true` only when at least two non-manual,
   adapter-backed source systems exist.
 

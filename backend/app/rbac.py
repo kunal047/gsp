@@ -1,25 +1,32 @@
-"""Lightweight RBAC + audit.
+"""RBAC + audit.
 
-The acting principal is carried on each request via X-User / X-Role / X-Scope
-headers (set by the front-end role switcher). In deployment these come from the
-department SSO / identity provider — the enforcement here (scoping + action
-gating + audit attribution) is the same either way.
+The acting principal is derived from a **verified signed token** (Authorization:
+Bearer <JWT>), not from caller-supplied headers - so a client cannot self-assign
+a role or district. The token is minted by /api/auth/login after a password
+check and signed with a server-side secret; a forged role fails signature
+verification. Scoping + action gating + audit attribution then key off the
+verified claims.
 
 Roles:
-  state_admin      — full access, all districts, may act
-  district_officer — scoped to one district (X-Scope), may act
-  viewer           — read-only, all districts
+  state_admin      - full access, all districts, may act
+  district_officer - scoped to one district (token scope), may act
+  viewer           - read-only, all districts
+
+A legacy header path remains available ONLY when NETRA_DEV_AUTH=1 (off by
+default) for local development; in normal operation headers are ignored.
 """
+import os
 from dataclasses import dataclass
 
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
-from . import models
+from . import auth, models
 from .db import get_db
 
 ROLES = {"state_admin", "district_officer", "viewer"}
 CAN_ACT = {"state_admin", "district_officer"}
+DEV_AUTH = os.getenv("NETRA_DEV_AUTH") == "1"
 
 
 @dataclass
@@ -30,12 +37,22 @@ class Principal:
 
 
 def principal(
-    x_user: str = Header(default="demo"),
-    x_role: str = Header(default="state_admin"),
+    authorization: str = Header(default=""),
+    x_user: str = Header(default=""),
+    x_role: str = Header(default=""),
     x_scope: str = Header(default=""),
 ) -> Principal:
-    role = x_role if x_role in ROLES else "viewer"
-    return Principal(user=x_user or "demo", role=role, scope=x_scope or None)
+    if authorization.lower().startswith("bearer "):
+        claims = auth.verify_token(authorization[7:].strip())
+        if claims is None:
+            raise HTTPException(status_code=401, detail="invalid or expired token")
+        role = claims.get("role") if claims.get("role") in ROLES else "viewer"
+        return Principal(user=claims.get("sub") or "unknown", role=role,
+                         scope=claims.get("scope"))
+    if DEV_AUTH:
+        role = x_role if x_role in ROLES else "viewer"
+        return Principal(user=x_user or "demo", role=role, scope=x_scope or None)
+    raise HTTPException(status_code=401, detail="authentication required")
 
 
 def require_actor(p: Principal = Depends(principal)) -> Principal:

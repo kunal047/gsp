@@ -1,7 +1,7 @@
 """Netra Stream Gateway.
 
 Makes heterogeneous source feeds browser-playable without touching the source
-system — the Model 3 "adapter / stream gateway" component, realised with ffmpeg.
+system - the Model 3 "adapter / stream gateway" component, realised with ffmpeg.
 
 - `c=copy`  : remux only (h264-in-MKV/MP4). Cheap, no re-encode.
 - `c=x264`  : transcode to H.264 (AVI / unknown codecs). Heavier; used only
@@ -96,9 +96,13 @@ def _jpeg(data: bytes) -> Response:
 def _registered_source(camera_id: str) -> str:
     """Resolve only backend-registered feeds; never accept arbitrary URLs."""
     encoded = urllib.parse.quote(camera_id, safe="")
+    headers = {"User-Agent": "netra-gateway"}
+    token = os.getenv("BACKEND_TOKEN", "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(
         f"{BACKEND_URL}/api/cameras/{encoded}",
-        headers={"User-Agent": "netra-gateway"},
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(request, timeout=8) as response:

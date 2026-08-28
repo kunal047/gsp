@@ -34,6 +34,7 @@ services:
       RTSP_SOURCES_JSON: ${RTSP_SOURCES_JSON:-[]}
       ATTRIBUTE_MIN_CLASS_CONFIDENCE: ${ATTRIBUTE_MIN_CLASS_CONFIDENCE:-0.75}
       HEAVY_VEHICLE_CLASS_CONFIDENCE: ${HEAVY_VEHICLE_CLASS_CONFIDENCE:-0.85}
+      NETRA_JWT_SECRET: ${NETRA_JWT_SECRET:?Set NETRA_JWT_SECRET in .env}
     volumes:
       - snapshots:/snapshots
       - ./backend/app:/app/app
@@ -47,6 +48,7 @@ services:
     environment:
       LIVE_BASE: ${LIVE_BASE:-https://live.corp8.cloud}
       BACKEND_URL: http://backend:8000
+      BACKEND_TOKEN: ${BACKEND_SERVICE_TOKEN:?Set BACKEND_SERVICE_TOKEN in .env}
     depends_on:
       - backend
     ports:
@@ -70,8 +72,20 @@ services:
       VEHICLE_MODEL: ${VEHICLE_MODEL:-yolov8n.pt}
       VEHICLE_CLASS_MAP_JSON: ${VEHICLE_CLASS_MAP_JSON:-}
       CAMERA_EXPECTED_DIRECTIONS_JSON: ${CAMERA_EXPECTED_DIRECTIONS_JSON:-}
+      BACKEND_TOKEN: ${BACKEND_SERVICE_TOKEN:?Set BACKEND_SERVICE_TOKEN in .env}
     depends_on:
       - backend
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest-ffmpeg
+    restart: unless-stopped
+    volumes:
+      - ./infra/mediamtx/mediamtx.yml:/mediamtx.yml:ro
+      - ./data/clips:/clips:ro
+    expose:
+      - "8554"
+    ports:
+      - "8554:8554"
 
   frontend:
     build: ./frontend

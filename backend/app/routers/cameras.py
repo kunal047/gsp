@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from .. import crud, models, schemas
+from .. import cache, crud, integrations, models, schemas
 from ..db import get_db
 from ..rbac import Principal, audit, principal, require_actor
 
@@ -178,6 +178,8 @@ def delete_camera(
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
     db.delete(cam)
+    integrations.forget_baseline(db, camera_id)  # cascade: drop its alert baseline
+    cache.invalidate()
     db.commit()
     audit(db, p, "registry.camera_delete", camera_id)
 

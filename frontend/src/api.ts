@@ -2,30 +2,92 @@ const env = (import.meta as any).env || {};
 const API_BASE = env.VITE_API_BASE || (env.PROD ? "/server" : "http://localhost:8000");
 const GATEWAY_BASE = env.VITE_GATEWAY_BASE || (env.PROD ? "/gateway" : "http://localhost:8081");
 
-// --- RBAC principal (set by the role switcher; sent on every request) ---
+// --- Auth: identity + role come from a signed JWT (no spoofable headers) ---
 export interface Principal {
   user: string;
   role: string; // state_admin | district_officer | viewer
   scope: string; // district for district_officer
 }
-let _principal: Principal = { user: "control_room", role: "state_admin", scope: "" };
-export function setPrincipal(p: Principal) {
-  _principal = p;
+export interface Session extends Principal {
+  token: string;
+  full_name?: string;
+}
+
+const SESSION_KEY = "netra-session";
+
+function loadSession(): Session | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    return raw ? (JSON.parse(raw) as Session) : null;
+  } catch {
+    return null;
+  }
+}
+let _session: Session | null = loadSession();
+
+export function getSession(): Session | null {
+  return _session;
+}
+export function isAuthenticated(): boolean {
+  return !!_session?.token;
 }
 export function getPrincipal(): Principal {
-  return _principal;
+  return {
+    user: _session?.user || "",
+    role: _session?.role || "viewer",
+    scope: _session?.scope || "",
+  };
+}
+export async function login(username: string, password: string): Promise<Session> {
+  const res = await fetch(`${API_BASE}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `login failed (${res.status})`);
+  }
+  const data = await res.json();
+  _session = {
+    token: data.access_token,
+    user: data.user,
+    role: data.role,
+    scope: data.scope || "",
+    full_name: data.full_name,
+  };
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(_session));
+  } catch {
+    /* storage unavailable - session stays in memory for this tab */
+  }
+  return _session;
+}
+export function logout() {
+  _session = null;
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
-  return {
-    "X-User": _principal.user,
-    "X-Role": _principal.role,
-    "X-Scope": _principal.scope,
-    ...extra,
-  };
+  const headers: Record<string, string> = { ...extra };
+  if (_session?.token) headers["Authorization"] = `Bearer ${_session.token}`;
+  return headers;
+}
+function handleUnauthorized(status: number) {
+  if (status === 401) {
+    logout();
+    window.dispatchEvent(new Event("netra-unauthorized"));
+  }
 }
 async function apiGet(path: string) {
   const res = await fetch(`${API_BASE}${path}`, { headers: authHeaders() });
-  if (!res.ok) throw new Error(`GET ${path} failed (${res.status})`);
+  if (!res.ok) {
+    handleUnauthorized(res.status);
+    throw new Error(`GET ${path} failed (${res.status})`);
+  }
   return res.json();
 }
 async function apiPost(path: string, body?: any) {
@@ -367,7 +429,14 @@ export interface DetStats {
 }
 
 export function snapshotUrl(path: string | null): string | null {
-  return path ? `${API_BASE}${path}` : null;
+  if (!path) return null;
+  // Evidence in private object storage is served by the authenticated proxy;
+  // <img> can't send a Bearer header, so pass the session token in the query.
+  if (path.startsWith("/api/evidence/") && _session?.token) {
+    const sep = path.includes("?") ? "&" : "?";
+    return `${API_BASE}${path}${sep}t=${encodeURIComponent(_session.token)}`;
+  }
+  return `${API_BASE}${path}`;
 }
 
 export async function fetchDetections(
@@ -379,6 +448,25 @@ export async function fetchDetections(
 
 export async function fetchDetectionStats(): Promise<DetStats> {
   return apiGet(`/api/detections/stats`);
+}
+
+export interface CameraBaseline {
+  camera_id: string;
+  baseline: number;
+  samples: number;
+  peak: number;
+  warmed: boolean;
+  congestion_threshold: number;
+  override: number | null;
+}
+export interface AlertCalibration {
+  warmup_samples: number;
+  congestion_floor: number;
+  baseline_factor: number;
+  cameras: CameraBaseline[];
+}
+export async function fetchAlertBaselines(): Promise<AlertCalibration> {
+  return apiGet(`/api/alerts/baselines`);
 }
 
 export interface RoutePoint {

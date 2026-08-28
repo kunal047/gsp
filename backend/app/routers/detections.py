@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from .. import integrations, models, schemas
+from .. import cache, integrations, models, schemas, storage
 from ..bus import publish_detection
 from ..db import get_db
 from ..rbac import Principal, audit, principal
@@ -43,18 +43,13 @@ def _parse_ts(value) -> Optional[datetime]:
 
 
 def _save_snapshot(b64: str) -> Optional[str]:
-    try:
-        raw = _decode_snapshot(b64)
-        if raw is None:
-            return None
-        os.makedirs(SNAP_DIR, exist_ok=True)
-        fn = f"{uuid.uuid4().hex}.jpg"
-        with open(os.path.join(SNAP_DIR, fn), "wb") as f:
-            f.write(raw)
-        return f"/snapshots/{fn}"
-    except Exception as e:  # noqa: BLE001
-        print(f"[detections] snapshot save failed: {e}")
+    """Decode the evidence JPEG and persist it to object storage (Supabase
+    Storage), falling back to the local volume. Returns the reference stored on
+    the row: '/api/evidence/<key>' for object storage, '/snapshots/<key>' local."""
+    raw = _decode_snapshot(b64)
+    if raw is None:
         return None
+    return storage.save(raw)
 
 
 def _decode_snapshot(b64: str) -> Optional[bytes]:
@@ -128,11 +123,7 @@ def ingest_detection(d: schemas.DetectionIn, db: Session = Depends(get_db)):
             status_code=422,
             detail="snapshot could not be decoded or saved; detection was not stored",
         )
-    cam = (
-        db.query(models.Camera)
-        .filter(models.Camera.camera_id == d.camera_id)
-        .first()
-    )
+    cam = cache.get_camera(db, d.camera_id)
     event_ts = d.event_ts or d.first_seen
     first_seen = d.first_seen or event_ts
     last_seen = d.last_seen or event_ts
@@ -257,11 +248,7 @@ def detection_evidence(
 def frame_summary(payload: dict, db: Session = Depends(get_db)):
     """Per-frame vehicle count from the worker -> real congestion/surge alerts
     computed from the live feed (no external DB)."""
-    cam = (
-        db.query(models.Camera)
-        .filter(models.Camera.camera_id == payload.get("camera_id"))
-        .first()
-    )
+    cam = cache.get_camera(db, payload.get("camera_id"))
     if not cam:
         return {"alerts": 0, "alert_ids": []}
     count = int(payload.get("vehicle_count", 0))
@@ -355,7 +342,7 @@ def track(
 ):
     """Hybrid cross-camera tracking. Match a target either by plate (ANPR) or by
     vehicle attributes (type + colour), and return a time-ordered route across
-    cameras — the scored 'movement history' output."""
+    cameras - the scored 'movement history' output."""
     q = db.query(models.DetectionEvent)
     q = q.filter(models.DetectionEvent.track_uuid.isnot(None))
     mode = None

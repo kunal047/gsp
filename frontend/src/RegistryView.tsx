@@ -279,9 +279,9 @@ export default function RegistryView({ onChanged }: { onChanged?: () => void }) 
           <tbody>{filtered.map((camera) => (
             <tr key={camera.camera_id}>
               <td><strong>{camera.name || "Unnamed camera"}</strong><code>{camera.camera_id}</code></td>
-              <td>{camera.site || "—"}<small>{camera.city || "Unknown district"}</small></td>
-              <td>{camera.department || "—"}</td>
-              <td>{camera.protocol || "—"} · {camera.container || camera.codec || "unknown"}<small>{camera.analytics_enabled ? "Analytics enabled" : "View only"}</small></td>
+              <td>{camera.site || "-"}<small>{camera.city || "Unknown district"}</small></td>
+              <td>{camera.department || "-"}</td>
+              <td>{camera.protocol || "-"} · {camera.container || camera.codec || "unknown"}<small>{camera.analytics_enabled ? "Analytics enabled" : "View only"}</small></td>
               <td><span className={`health-chip ${camera.health_status}`}>{camera.health_status || "unknown"}</span></td>
               <td><span className={`maintenance-chip ${camera.maintenance_status}`}>{camera.maintenance_status || "unknown"}</span>{camera.next_service_at && <small>Next {new Date(camera.next_service_at).toLocaleDateString()}</small>}{canAct && <button className="table-action" onClick={() => editLifecycle(camera)}>Manage</button>}</td>
               <td>{camera.source || "Unspecified"}</td>

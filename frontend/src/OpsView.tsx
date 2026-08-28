@@ -4,10 +4,12 @@ import {
   fetchGapAnalysis,
   fetchFederationReport,
   fetchReadinessReport,
+  fetchAlertBaselines,
   type AuditEntry,
   type GapAnalysis,
   type FederationReport,
   type ReadinessReport,
+  type AlertCalibration,
 } from "./api";
 import { districtColor } from "./theme";
 
@@ -16,6 +18,7 @@ export default function OpsView() {
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [federation, setFederation] = useState<FederationReport | null>(null);
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
+  const [calibration, setCalibration] = useState<AlertCalibration | null>(null);
 
   useEffect(() => {
     const load = () => {
@@ -23,6 +26,7 @@ export default function OpsView() {
       fetchAudit().then(setAudit).catch(() => {});
       fetchFederationReport().then(setFederation).catch(() => {});
       fetchReadinessReport().then(setReadiness).catch(() => {});
+      fetchAlertBaselines().then(setCalibration).catch(() => {});
     };
     load();
     const t = setInterval(load, 4000);
@@ -87,7 +91,7 @@ export default function OpsView() {
                 <div className="ops-sub">Offline feeds (health monitor)</div>
                 {gap.offline_cameras.map((c) => (
                   <div className="ops-off" key={c.camera_id}>
-                    <span className="off-dot" /> {c.name} — {c.site} ({c.city})
+                    <span className="off-dot" /> {c.name} - {c.site} ({c.city})
                   </div>
                 ))}
               </>
@@ -160,6 +164,53 @@ export default function OpsView() {
             </table>
           </>
         )}
+        <div className="section-title" style={{ marginTop: 0 }}>
+          Alert Calibration · adaptive per-camera thresholds
+        </div>
+        {calibration && (
+          <>
+            <div className="hint">
+              Congestion floor {calibration.congestion_floor} · adaptive at
+              baseline × {calibration.baseline_factor} once warmed
+              ({calibration.warmup_samples} frames). Baselines are learned live
+              and persist across restarts.
+            </div>
+            <table className="ops-table">
+              <thead>
+                <tr>
+                  <th>Camera</th>
+                  <th>Baseline</th>
+                  <th>Samples</th>
+                  <th>Peak</th>
+                  <th>Threshold</th>
+                </tr>
+              </thead>
+              <tbody>
+                {calibration.cameras.length === 0 && (
+                  <tr><td colSpan={5}><span className="hint">No baselines yet - cameras warming up.</span></td></tr>
+                )}
+                {calibration.cameras.slice(0, 12).map((c) => (
+                  <tr key={c.camera_id}>
+                    <td>{c.camera_id}</td>
+                    <td>{c.baseline.toFixed(1)}</td>
+                    <td>
+                      {c.samples}
+                      {!c.warmed && <em style={{ color: "#f59e0b" }}> · warming</em>}
+                    </td>
+                    <td>{c.peak}</td>
+                    <td>
+                      {c.congestion_threshold}
+                      {c.override != null && (
+                        <em style={{ color: "#60a5fa" }}> · pinned</em>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+
         <div className="section-title" style={{ marginTop: 0 }}>
           Audit Log · tamper-evident trail
         </div>

@@ -104,7 +104,7 @@ class DetectionEvent(Base):
 
 class Watchlist(Base):
     """Representative watchlist database (challenge Step 3). Records of interest
-    that live detections are matched against. NOT live government records —
+    that live detections are matched against. NOT live government records -
     synthetic/representative data for demonstration."""
 
     __tablename__ = "watchlist"
@@ -169,3 +169,39 @@ class AuditLog(Base):
     action = Column(String, index=True)
     detail = Column(String)
     ts = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class CameraBaseline(Base):
+    """Persisted per-camera traffic baseline for alert calibration.
+
+    The EMA of the per-frame vehicle count is learned live and stored here so it
+    survives restarts (no cold-start false surges), and the congestion threshold
+    adapts per camera - a busy junction and a quiet lane no longer share one
+    global cut-off. An operator may pin an explicit threshold via override."""
+
+    __tablename__ = "camera_baselines"
+
+    camera_id = Column(String, primary_key=True)
+    ema = Column(Float, nullable=False, default=0.0)          # learned normal count
+    sample_count = Column(Integer, nullable=False, default=0)  # frames observed
+    peak = Column(Integer, nullable=False, default=0)          # highest count seen
+    congestion_threshold = Column(Integer, nullable=True)      # operator override; null = adaptive
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class User(Base):
+    """Authenticated operator. Identity + role come from a verified signed token,
+    NOT from caller-supplied headers - so a client cannot self-assign a role."""
+
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    full_name = Column(String)
+    password_hash = Column(String, nullable=False)  # pbkdf2$iter$salt$hash
+    role = Column(String, nullable=False, default="viewer")
+    scope = Column(String, nullable=True)  # district for district_officer
+    active = Column(Boolean, nullable=False, default=True)
+    created = Column(DateTime(timezone=True), server_default=func.now())

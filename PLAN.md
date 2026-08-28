@@ -1,6 +1,6 @@
-# Gujarat Police Innovation Challenge 2026 — Master Plan
+# Gujarat Police Innovation Challenge 2026 - Master Plan
 
-> **Project codename:** Sentinel (working name: **"Netra"** — unified CCTV intelligence platform)
+> **Project codename:** Sentinel (working name: **"Netra"** - unified CCTV intelligence platform)
 > **Owner:** Kunal
 > **Last updated:** 2026-08-21
 > **Source of truth:** https://sentinel.gujarat.gov.in (`/`, `/about`, `/phases`, `/problems`, `/schedule`, `/faqs`)
@@ -9,7 +9,7 @@
 
 ## 1. The challenge in one paragraph
 
-Gujarat Police runs a real-deployment innovation challenge (₹37 L pool, partners NFSU + DA-IICT) to unify 26 departments' fragmented CCTV systems into one secure, scalable, interoperable video-management + analytics platform. The scored, on-the-day test is concrete: onboard ~50 simulated-live camera feeds, and — **given a vehicle number on the day** — track that vehicle across cameras and output its **complete route + timestamped, location-wise movement history**. Demos must be **real working software** (mock-ups/animations are explicitly rejected).
+Gujarat Police runs a real-deployment innovation challenge (₹37 L pool, partners NFSU + DA-IICT) to unify 26 departments' fragmented CCTV systems into one secure, scalable, interoperable video-management + analytics platform. The scored, on-the-day test is concrete: onboard ~50 simulated-live camera feeds, and - **given a vehicle number on the day** - track that vehicle across cameras and output its **complete route + timestamped, location-wise movement history**. Demos must be **real working software** (mock-ups/animations are explicitly rejected).
 
 ## 2. Hard constraints & dates (non-negotiable)
 
@@ -24,7 +24,7 @@ Gujarat Police runs a real-deployment innovation challenge (₹37 L pool, partne
 
 ### Rules that shape everything
 - **Model 1 (Registry + GIS) is COMPULSORY** and must be combined with ≥1 other model.
-- **Demos must be actual working software** — no mock-ups/animations/concept videos (FAQ #32).
+- **Demos must be actual working software** - no mock-ups/animations/concept videos (FAQ #32).
 - Government-feed demo must show **real ANPR/detection output** = report of plates + timestamps (FAQ #31/#33).
 - Two competition categories (see §9). Top 3 per category in Phase 1 → 6 finalists → Phase 2.
 
@@ -32,20 +32,20 @@ Gujarat Police runs a real-deployment innovation challenge (₹37 L pool, partne
 
 The 7 official evaluation areas (FAQ #36), in priority order for our effort:
 
-1. **Successful test case** — onboarding + cross-camera vehicle tracking on the govt feed. ← the crux
-2. **Video analytics output** — quality of ANPR / detection / route report.
-3. **Working platform** — maturity of demonstrated software.
-4. **Solution architecture** — HLD technical soundness.
-5. **Scalability & PoC readiness** — ~80,000-camera plan.
-6. **Solution presentation** — clarity + model justification.
+1. **Successful test case** - onboarding + cross-camera vehicle tracking on the govt feed. ← the crux
+2. **Video analytics output** - quality of ANPR / detection / route report.
+3. **Working platform** - maturity of demonstrated software.
+4. **Solution architecture** - HLD technical soundness.
+5. **Scalability & PoC readiness** - ~80,000-camera plan.
+6. **Solution presentation** - clarity + model justification.
 7. **Submission completeness.**
 
 > Design principle: **build the vehicle-tracking vertical slice end-to-end first**; everything else (extra analytics, polish, bonus features) layers on top.
 
 ## 4. Chosen architecture: Hybrid = Models 1 + 2 + 3, selective AI
 
-- **Model 1 (mandatory):** Centralised CCTV Registry & GIS map — camera metadata, health, gap analysis.
-- **Model 2:** Unified viewing and metadata analytics — browser-safe streams,
+- **Model 1 (mandatory):** Centralised CCTV Registry & GIS map - camera metadata, health, gap analysis.
+- **Model 2:** Unified viewing and metadata analytics - browser-safe streams,
   video wall, indexed detections, ANPR/search and evidence-backed alerts.
 - **Model 3 (federation/middleware):** Adapter/connector layer + unified API/stream gateway + event bus. This is the "no rip-replace, vendor-neutral" thesis and earns the *innovative hybrid* bonus (#38).
 - **Selective AI:** ANPR, vehicle detection and cross-camera tracking run
@@ -87,25 +87,25 @@ Dept cameras / 50 sim-live stream URLs
 
 > All "prod-scale" choices (MQTT+Redpanda, Kubernetes, S3/Ceph, GPU edge) live in the HLD; the running prototype uses the lighter equivalents but the *interfaces* are identical. Statewide sizing for ~80,000 cameras is worked out in [SCALABILITY.md](SCALABILITY.md).
 
-## 6. Prototype scope — vertical slices (build order)
+## 6. Prototype scope - vertical slices (build order)
 
-- **S0. Scaffold** — monorepo, docker-compose, docs skeleton, seed data.
-- **S1. Registry + GIS (Model 1)** — camera CRUD + bulk import, PostGIS, MapLibre map color-coded by dept + health. *Mandatory deliverable.*
-- **S2. Stream gateway + video wall** — ingest sample RTSP/video files, multi-camera grid in browser.
-- **S3. ANPR + detection service** — real plate detection + OCR + vehicle detection on sample video; write detection events.
-- **S4. Cross-camera vehicle tracking** ← **core win condition** — plate query → ordered route + timestamped movement history rendered on map + as report.
-- **S5. DB integration + alerts** — mock VAHAN/eGujCop/AFIS services; hit → real-time alert in command center.
-- **S6. Security & ops** — dept RBAC, audit log, camera health monitoring, gap-analysis report.
-- **S7. Govt-feed swap + dry run** — replace sample URLs with the 50 sandbox stream URLs; run the actual test case.
+- **S0. Scaffold** - monorepo, docker-compose, docs skeleton, seed data.
+- **S1. Registry + GIS (Model 1)** - camera CRUD + bulk import, PostGIS, MapLibre map color-coded by dept + health. *Mandatory deliverable.*
+- **S2. Stream gateway + video wall** - ingest sample RTSP/video files, multi-camera grid in browser.
+- **S3. ANPR + detection service** - real plate detection + OCR + vehicle detection on sample video; write detection events.
+- **S4. Cross-camera vehicle tracking** ← **core win condition** - plate query → ordered route + timestamped movement history rendered on map + as report.
+- **S5. DB integration + alerts** - mock VAHAN/eGujCop/AFIS services; hit → real-time alert in command center.
+- **S6. Security & ops** - dept RBAC, audit log, camera health monitoring, gap-analysis report.
+- **S7. Govt-feed swap + dry run** - replace sample URLs with the 50 sandbox stream URLs; run the actual test case.
 
 Bonus (if time, #38): re-ID cross-camera matching, edge/bandwidth optimization, face detection, operational dashboards, integration-ready public APIs.
 
 ## 7. Document deliverables (required for submission)
 
-1. **Solution Presentation (PPT/PDF)** — chosen model + justification, overview, key features, screenshots.
-2. **High-Level Design (HLD)** — architecture diagrams; heterogeneous camera/VMS integration (IP/analog/multi-vendor/protocols); dispersed-site handling (bandwidth, edge vs central); analytics approach (ANPR + cross-camera tracking); **~80,000-camera scalability plan** (central/regional/edge compute, GPU sizing, bandwidth/low-bw strategy, hot/warm/cold storage, HA/DR, phased rollout); dept-level integration details.
-3. **Two demo videos** — (a) own feed (2–3 min): onboarding + live/recorded view + ANPR; (b) govt feed: onboarding + viewing + analytics output, **plus an output report of plates/timestamps**.
-4. **Optional (do it — earns points):** hosted URL + test creds, GitHub repo with source.
+1. **Solution Presentation (PPT/PDF)** - chosen model + justification, overview, key features, screenshots.
+2. **High-Level Design (HLD)** - architecture diagrams; heterogeneous camera/VMS integration (IP/analog/multi-vendor/protocols); dispersed-site handling (bandwidth, edge vs central); analytics approach (ANPR + cross-camera tracking); **~80,000-camera scalability plan** (central/regional/edge compute, GPU sizing, bandwidth/low-bw strategy, hot/warm/cold storage, HA/DR, phased rollout); dept-level integration details.
+3. **Two demo videos** - (a) own feed (2–3 min): onboarding + live/recorded view + ANPR; (b) govt feed: onboarding + viewing + analytics output, **plus an output report of plates/timestamps**.
+4. **Optional (do it - earns points):** hosted URL + test creds, GitHub repo with source.
 
 ## 8. Work breakdown & sequencing (calendar)
 
@@ -120,11 +120,11 @@ Bonus (if time, #38): re-ID cross-camera matching, edge/bandwidth optimization, 
 
 ## 9. Open decisions (need Kunal's input)
 
-1. **Category** — Cat 1 (student/DPIIT startup) or Cat 2 (company/enterprise)? Affects positioning & prize bracket. *Default assumption: Cat 1 unless told otherwise.*
-2. **Team** — solo or team? Affects how much bonus scope is realistic.
-3. **Compute** — is a GPU available (local/cloud) for real-time ANPR? *Fallback: frame-sampled ANPR on CPU for the demo; note GPU in scalability plan.*
-4. **ANPR model** — Indian-plate-tuned model vs generic + fine-tune. *Default: start with a pretrained plate detector + OCR, evaluate on sample frames, fine-tune only if accuracy is weak.*
-5. **Naming/branding** — keep "Netra" or pick another. Cosmetic.
+1. **Category** - Cat 1 (student/DPIIT startup) or Cat 2 (company/enterprise)? Affects positioning & prize bracket. *Default assumption: Cat 1 unless told otherwise.*
+2. **Team** - solo or team? Affects how much bonus scope is realistic.
+3. **Compute** - is a GPU available (local/cloud) for real-time ANPR? *Fallback: frame-sampled ANPR on CPU for the demo; note GPU in scalability plan.*
+4. **ANPR model** - Indian-plate-tuned model vs generic + fine-tune. *Default: start with a pretrained plate detector + OCR, evaluate on sample frames, fine-tune only if accuracy is weak.*
+5. **Naming/branding** - keep "Netra" or pick another. Cosmetic.
 
 ## 10. Risks & mitigations
 

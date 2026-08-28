@@ -32,7 +32,7 @@ function popupHtml(c: Camera): string {
       ? "#f59e0b"
       : "#6b7280";
   return `
-    <b>${c.name} — ${c.site || ""}</b>
+    <b>${c.name} - ${c.site || ""}</b>
     <div class="popup-row"><span>ID</span> ${c.camera_id}</div>
     <div class="popup-row"><span>District</span> ${c.city}${
     c.coords_approx ? " (approx)" : ""
@@ -45,7 +45,7 @@ function popupHtml(c: Camera): string {
   } · ${c.delivery || "?"}</div>
     <div class="popup-row"><span>Protocol</span> ${c.protocol || "?"}</div>
     <div class="popup-row"><span>Stream</span> ${
-      c.stream_url ? c.stream_url.replace(/^https?:\/\//, "") : "—"
+      c.stream_url ? c.stream_url.replace(/^https?:\/\//, "") : "-"
     }</div>
     <div class="popup-row"><span>Status</span>
       <span class="badge" style="background:${statusColor}22;color:${statusColor}">

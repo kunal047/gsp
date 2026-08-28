@@ -21,9 +21,14 @@ import numpy as np
 # Plate reads are only trusted when the SAME normalised plate is read across
 # several frames of one track (single-crop OCR is noise). Random misreads rarely
 # repeat the same string, so consensus + a real confidence floor + a valid
-# Indian-plate format removes false positives — no plate is stored otherwise.
+# Indian-plate format removes false positives - no plate is stored otherwise.
 PLATE_MIN_AGREEMENTS = int(os.getenv("PLATE_MIN_AGREEMENTS", "3"))
 PLATE_MIN_OCR_CONFIDENCE = float(os.getenv("PLATE_MIN_OCR_CONFIDENCE", "0.5"))
+# Bound how long a single track may stay open. A track alive beyond this (a
+# wedged/loitering vehicle, or a looping test feed where the subject never
+# leaves) is checkpointed into an event and re-formed, so evidence is emitted
+# instead of accumulating forever. Measured on the PTS media clock.
+MAX_TRACK_SECONDS = float(os.getenv("MAX_TRACK_SECONDS", "20"))
 PLATE_FORMAT_RE = re.compile(r"^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{3,4}$")
 
 
@@ -251,7 +256,18 @@ class TrackLifecycle:
 
         completed = []
         for key, state in list(self.states.items()):
-            if key[0] != camera_id or key in observed:
+            if key[0] != camera_id:
+                continue
+            if key in observed:
+                # Checkpoint a track that has stayed open too long, then drop its
+                # state so the next observation starts a fresh track/event. Age is
+                # measured on the wall clock (first_seen -> last_seen): live RTSP
+                # often doesn't report PTS, so the media clock creeps unreliably.
+                age = (state.last_seen - state.first_seen).total_seconds()
+                if MAX_TRACK_SECONDS and age >= MAX_TRACK_SECONDS:
+                    event = self._complete(key, state)
+                    if event:
+                        completed.append(event)
                 continue
             state.misses += 1
             if state.misses >= self.max_misses:

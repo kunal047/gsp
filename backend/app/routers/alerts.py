@@ -5,11 +5,61 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from .. import models
+from .. import integrations, models
 from ..db import get_db
-from ..rbac import Principal, audit, require_actor
+from ..rbac import Principal, audit, principal, require_actor
 
 router = APIRouter(prefix="/api", tags=["alerts"])
+
+
+@router.get("/alerts/baselines")
+def alert_baselines(
+    db: Session = Depends(get_db), p: Principal = Depends(principal)
+):
+    """Live alert calibration: the learned per-camera traffic baseline, sample
+    count, warm-up state and effective congestion threshold."""
+    rows = integrations.baseline_snapshot()
+    if p.role == "district_officer" and p.scope:
+        scoped = {
+            c.camera_id
+            for c in db.query(models.Camera.camera_id)
+            .filter(models.Camera.city == p.scope)
+            .all()
+        }
+        rows = [r for r in rows if r["camera_id"] in scoped]
+    return {
+        "warmup_samples": integrations.WARMUP_SAMPLES,
+        "congestion_floor": integrations.CONGESTION_MIN,
+        "baseline_factor": integrations.CONGESTION_BASELINE_FACTOR,
+        "cameras": rows,
+    }
+
+
+@router.put("/alerts/baselines/{camera_id}/threshold")
+def set_congestion_threshold(
+    camera_id: str,
+    body: dict,
+    db: Session = Depends(get_db),
+    p: Principal = Depends(require_actor),
+):
+    """Operator override of a camera's congestion threshold (null = adaptive)."""
+    cam = (
+        db.query(models.Camera)
+        .filter(models.Camera.camera_id == camera_id)
+        .first()
+    )
+    if not cam:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if p.role == "district_officer" and p.scope and cam.city != p.scope:
+        raise HTTPException(status_code=403, detail="camera is outside district scope")
+    raw = body.get("threshold")
+    threshold = None if raw in (None, "", "auto") else int(raw)
+    if threshold is not None and threshold < 1:
+        raise HTTPException(status_code=422, detail="threshold must be >= 1")
+    effective = integrations.set_congestion_override(db, camera_id, threshold)
+    audit(db, p, "alerts.threshold_override",
+          f"{camera_id} · {'auto' if threshold is None else threshold}")
+    return {"camera_id": camera_id, "override": threshold, "effective_threshold": effective}
 
 
 def _operational_alerts(db: Session):
@@ -167,7 +217,7 @@ def ack_alert(
         raise HTTPException(status_code=404, detail="alert not found")
     a.acknowledged = True
     db.commit()
-    audit(db, p, "alert.ack", f"alert #{a.id} — {a.reason}")
+    audit(db, p, "alert.ack", f"alert #{a.id} - {a.reason}")
     return {"id": a.id, "acknowledged": True}
 
 

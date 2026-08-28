@@ -1,0 +1,33 @@
+# MediaMTX - Independent RTSP System (Model 3 second source).
+# Publishes controlled test clips as live RTSP so the analytics worker consumes
+# them exactly as it would a physical camera: real RTP, monotonic PTS, no seek.
+logLevel: info
+logDestinations: [stdout]
+
+rtspAddress: :8554
+rtmpAddress: :1935
+hlsAddress: :8888
+webrtcAddress: :8890   # avoid clashing with the provider's :8889 convention
+
+pathDefaults:
+  runOnInitRestart: yes
+
+paths:
+  # Controlled ground-truth ANPR clip published on three corridor cameras so the
+  # same readable plate is genuinely read at multiple LIVE RTSP feeds, yielding a
+  # real cross-camera route. Looped forever (-stream_loop -1), paced to realtime.
+  stream/plate-demo-1:
+    runOnInit: >
+      ffmpeg -re -stream_loop -1 -i /clips/plate-demo.mp4
+      -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -g 25 -an
+      -f rtsp -rtsp_transport tcp rtsp://localhost:8554/$MTX_PATH
+  stream/plate-demo-2:
+    runOnInit: >
+      ffmpeg -re -stream_loop -1 -i /clips/plate-demo.mp4
+      -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -g 25 -an
+      -f rtsp -rtsp_transport tcp rtsp://localhost:8554/$MTX_PATH
+  stream/plate-demo-3:
+    runOnInit: >
+      ffmpeg -re -stream_loop -1 -i /clips/plate-demo.mp4
+      -c:v libx264 -preset veryfast -tune zerolatency -pix_fmt yuv420p -g 25 -an
+      -f rtsp -rtsp_transport tcp rtsp://localhost:8554/$MTX_PATH

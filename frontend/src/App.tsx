@@ -15,30 +15,22 @@ import {
   fetchDetectionStats,
   fetchHealth,
   retryIngest,
-  setPrincipal,
+  getSession,
+  isAuthenticated,
+  logout,
   type Camera,
   type Stats,
   type Health,
   type DetStats,
 } from "./api";
-
-const PRINCIPALS = [
-  { label: "State Admin", user: "control_room", role: "state_admin", scope: "" },
-  {
-    label: "District Officer · Ahmedabad",
-    user: "insp_sharma",
-    role: "district_officer",
-    scope: "Ahmedabad",
-  },
-  {
-    label: "District Officer · Junagadh",
-    user: "insp_patel",
-    role: "district_officer",
-    scope: "Junagadh",
-  },
-  { label: "Viewer (read-only)", user: "guest", role: "viewer", scope: "" },
-];
+import Login from "./Login";
 import { STATUS_COLORS, districtColor } from "./theme";
+
+const ROLE_LABELS: Record<string, string> = {
+  state_admin: "State Admin",
+  district_officer: "District Officer",
+  viewer: "Viewer (read-only)",
+};
 
 export default function App() {
   const [theme, setTheme] = useState<"dark" | "light">(() => {
@@ -60,7 +52,7 @@ export default function App() {
   const [selected, setSelected] = useState<Camera | null>(null);
   const [alertCount, setAlertCount] = useState(0);
   const [health, setHealth] = useState<Health | null>(null);
-  const [princIdx, setPrincIdx] = useState(0);
+  const [authed, setAuthed] = useState(isAuthenticated());
   const [rev, setRev] = useState(0);
 
   useEffect(() => {
@@ -69,13 +61,20 @@ export default function App() {
     localStorage.setItem("netra-theme", theme);
   }, [theme]);
 
-  const changeRole = (i: number) => {
-    setPrincipal(PRINCIPALS[i]);
-    setPrincIdx(i);
-    setRev((r) => r + 1);
+  // A rejected/expired token anywhere in the app drops back to the login screen.
+  useEffect(() => {
+    const onUnauth = () => setAuthed(false);
+    window.addEventListener("netra-unauthorized", onUnauth);
+    return () => window.removeEventListener("netra-unauthorized", onUnauth);
+  }, []);
+
+  const signOut = () => {
+    logout();
+    setAuthed(false);
   };
 
   useEffect(() => {
+    if (!authed) return;
     const poll = () => {
       fetchAlertStats()
         .then((s) => setAlertCount(s.unacknowledged))
@@ -86,7 +85,7 @@ export default function App() {
     poll();
     const t = setInterval(poll, 3000);
     return () => clearInterval(t);
-  }, []);
+  }, [authed]);
 
   const retry = async () => {
     try {
@@ -99,17 +98,19 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!authed) return;
     fetchStats().then(setStats).catch((e) => setError(String(e)));
-  }, [rev]);
+  }, [rev, authed]);
 
   useEffect(() => {
+    if (!authed) return;
     const params: Record<string, string> = {};
     if (cityFilter) params.city = cityFilter;
     if (statusFilter) params.health_status = statusFilter;
     fetchCameras(params)
       .then(setCameras)
       .catch((e) => setError(String(e)));
-  }, [cityFilter, statusFilter, rev]);
+  }, [cityFilter, statusFilter, rev, authed]);
 
   const cities = useMemo(
     () =>
@@ -118,6 +119,12 @@ export default function App() {
   );
   const source = cameras[0]?.source;
   const anyApprox = cameras.some((c) => c.coords_approx);
+
+  if (!authed) {
+    return <Login onLogin={() => { setAuthed(true); setRev((r) => r + 1); }} />;
+  }
+
+  const session = getSession();
 
   return (
     <div className="app">
@@ -179,18 +186,16 @@ export default function App() {
           </button>
         </div>
         <div className="spacer" />
-        <select
-          className="role-switch"
-          value={princIdx}
-          onChange={(e) => changeRole(Number(e.target.value))}
-          title="Signed-in role (RBAC)"
-        >
-          {PRINCIPALS.map((p, i) => (
-            <option key={i} value={i}>
-              {p.label}
-            </option>
-          ))}
-        </select>
+        <div className="user-chip" title="Signed-in identity (verified token)">
+          <span className="user-name">{session?.full_name || session?.user}</span>
+          <span className="user-role">
+            {ROLE_LABELS[session?.role || "viewer"] || session?.role}
+            {session?.scope ? ` · ${session.scope}` : ""}
+          </span>
+          <button className="signout" onClick={signOut} title="Sign out">
+            Sign out
+          </button>
+        </div>
         <button
           className="theme-toggle"
           onClick={() =>
@@ -206,29 +211,29 @@ export default function App() {
         </button>
         <div className="kpis">
           <div className="kpi">
-            <b>{stats?.total ?? "—"}</b>
+            <b>{stats?.total ?? "-"}</b>
             <small>Cameras</small>
           </div>
           <div className="kpi">
-            <b>{cities.length || "—"}</b>
+            <b>{cities.length || "-"}</b>
             <small>Districts</small>
           </div>
           <div className="kpi" title="Cameras the provider reports as live">
-            <b>{stats?.by_status?.online ?? "—"}</b>
+            <b>{stats?.by_status?.online ?? "-"}</b>
             <small>Online</small>
           </div>
           <div
             className="kpi"
             title="Cameras currently processed by the analytics worker"
           >
-            <b>{detStats?.active_cameras ?? "—"}</b>
+            <b>{detStats?.active_cameras ?? "-"}</b>
             <small>Analysed</small>
           </div>
           <div
             className="kpi"
             title="Distinct plates confirmed by multi-frame consensus"
           >
-            <b>{detStats?.unique_plates ?? "—"}</b>
+            <b>{detStats?.unique_plates ?? "-"}</b>
             <small>Plates</small>
           </div>
         </div>
@@ -236,7 +241,7 @@ export default function App() {
 
       {health && health.ingest_error && (
         <div className="ingest-banner">
-          ⚠ Live camera feed unavailable — {health.ingest_error}. No synthetic
+          ⚠ Live camera feed unavailable - {health.ingest_error}. No synthetic
           data is shown.
           <button onClick={retry}>Retry onboarding</button>
         </div>
@@ -307,7 +312,7 @@ export default function App() {
                 <span className="live-dot" /> Live government feed
               </div>
               <div className="prov">
-                {(stats?.by_source_system?.["Gujarat CSITMS"] ?? "—")} live CSITMS cameras · {stats?.total ?? "—"} registry assets
+                {(stats?.by_source_system?.["Gujarat CSITMS"] ?? "-")} live CSITMS cameras · {stats?.total ?? "-"} registry assets
               </div>
               {anyApprox && (
                 <div className="prov">

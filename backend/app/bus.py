@@ -1,5 +1,5 @@
 """Event bus publisher (Redis Streams in the prototype; MQTT + Redpanda in the
-statewide design — see SCALABILITY.md). Non-fatal on failure."""
+statewide design - see SCALABILITY.md). Non-fatal on failure."""
 import json
 import os
 

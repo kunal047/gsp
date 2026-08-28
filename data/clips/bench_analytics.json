@@ -1,0 +1,9 @@
+{
+  "per_frame_ms_mean": 4934.3,
+  "per_frame_ms_p95": 5378.8,
+  "cpu_frames_per_sec": 0.2,
+  "sampling_fps": 5.0,
+  "feeds_per_worker_cpu": 0.0,
+  "feeds_per_worker_gpu_10x": 0,
+  "iterations": 20
+}

@@ -5,11 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
-from . import crud, health_monitor, integrations, models
+from . import auth, crud, health_monitor, integrations, models, seed_assets
 from .db import Base, SessionLocal, engine
-from .routers import alerts, audit, cameras, detections, reports
+from .routers import alerts, audit, auth as auth_router, cameras, detections, evidence, reports
 
-app = FastAPI(title="Netra — CCTV Integration Platform API", version="0.1.0")
+app = FastAPI(title="Netra - CCTV Integration Platform API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,8 +19,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router.router)
 app.include_router(cameras.router)
 app.include_router(detections.router)
+app.include_router(evidence.router)
 app.include_router(alerts.router)
 app.include_router(audit.router)
 app.include_router(reports.router)
@@ -96,7 +98,7 @@ def ingest_cameras():
                     "status": "unreachable",
                     "error": str(last_error),
                 })
-                print(f"[ingest] FAILED — {message}")
+                print(f"[ingest] FAILED - {message}")
 
         INGEST["cameras"] = db.query(models.Camera).count()
         INGEST["adapters"] = statuses
@@ -115,6 +117,44 @@ def seed_watchlist():
         integrations.seed_watchlist(db)
     finally:
         db.close()
+
+
+def seed_users():
+    db = SessionLocal()
+    try:
+        auth.seed_users(db)
+    finally:
+        db.close()
+
+
+def load_baselines():
+    db = SessionLocal()
+    try:
+        loaded = integrations.load_baselines(db)
+        print(f"[alerts] hydrated {loaded} persisted camera baseline(s)")
+    finally:
+        db.close()
+
+
+def start_baseline_flusher():
+    """Periodically persist dirty baselines off the hot ingest path."""
+    import threading
+    import time as _t
+
+    interval = int(os.getenv("BASELINE_FLUSH_SECONDS", "5"))
+
+    def loop():
+        while True:
+            _t.sleep(interval)
+            db = SessionLocal()
+            try:
+                integrations.flush_dirty(db)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[alerts] baseline flusher error: {exc}")
+            finally:
+                db.close()
+
+    threading.Thread(target=loop, daemon=True).start()
 
 
 def refresh_registry_state():
@@ -140,11 +180,21 @@ def refresh_registry_state():
 def on_startup():
     init_db()
     seed_watchlist()
+    seed_users()
+    load_baselines()
     refresh_registry_state()
     if not SERVERLESS:
         ingest_cameras()
+        db = SessionLocal()
+        try:
+            filled = seed_assets.seed_asset_lifecycle(db)
+            print(f"[assets] seeded representative lifecycle for {filled} camera(s)")
+        finally:
+            db.close()
     if INGEST["cameras"] > 0 and not SERVERLESS:
         health_monitor.start()
+    if not SERVERLESS:
+        start_baseline_flusher()
 
 
 @app.get("/api/health")

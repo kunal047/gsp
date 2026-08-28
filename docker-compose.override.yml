@@ -1,0 +1,29 @@
+# Independent RTSP System onboarding (Model 3 second source), served by the
+# local MediaMTX service. Generated from infra/mediamtx/rtsp_sources.json.
+services:
+  analytics:
+    environment:
+      MAX_STREAMS: "3"
+      TRACK_MAX_MISSES: "2"
+      # Closer sampling keeps ByteTrack's identity stable across samples so a
+      # single track accrues the plate reads the consensus gate requires.
+      SAMPLE_EVERY: "1.0"
+      GRAB_SKIP: "2"
+      # RTSP sampling is sparse enough that ByteTrack cycles track ids, so tracks
+      # are short. 2 corroborating reads still gate reliably here because the
+      # plate-format regex already rejects partial/garbage OCR (only a full valid
+      # plate like GJ01AB1234 passes) - this is not "trust a single read".
+      TRACK_MIN_HITS: "2"
+      PLATE_MIN_AGREEMENTS: "2"
+      # Checkpoint a continuously-present vehicle into an event every ~8s so the
+      # looping RTSP demo emits promptly on every camera (consensus needs ~4
+      # reads at 2s sampling, so 8s clears the PLATE_MIN_AGREEMENTS=3 gate).
+      MAX_TRACK_SECONDS: "8"
+  backend:
+    environment:
+      # Evidence -> private Supabase Storage bucket (S3-class object storage).
+      SUPABASE_URL: "${SUPABASE_URL}"
+      SUPABASE_PUBLISHABLE_KEY: "${SUPABASE_PUBLISHABLE_KEY}"
+      STORAGE_BACKEND: "supabase"
+      EVIDENCE_BUCKET: "evidence"
+      RTSP_SOURCES_JSON: '[{"source_system": "Independent RTSP System", "camera_id": "RTSP-CORR-01", "external_id": "1", "name": "Corridor Cam 1 \u00b7 Ashram Road", "city": "Ahmedabad", "site": "Ashram Rd / Nehru Bridge approach", "lat": 23.036, "lng": 72.571, "coords_approx": false, "stream_url": "rtsp://mediamtx:8554/stream/plate-demo-1", "protocol": "RTSP (MediaMTX)", "codec": "h264", "delivery": "rtsp", "health_status": "online", "analytics_enabled": true, "make": "Test rig", "model": "MediaMTX", "camera_type": "IP"}, {"source_system": "Independent RTSP System", "camera_id": "RTSP-CORR-02", "external_id": "2", "name": "Corridor Cam 2 \u00b7 Nehru Bridge", "city": "Ahmedabad", "site": "Nehru Bridge mid-span", "lat": 23.028, "lng": 72.579, "coords_approx": false, "stream_url": "rtsp://mediamtx:8554/stream/plate-demo-2", "protocol": "RTSP (MediaMTX)", "codec": "h264", "delivery": "rtsp", "health_status": "online", "analytics_enabled": true, "make": "Test rig", "model": "MediaMTX", "camera_type": "IP"}, {"source_system": "Independent RTSP System", "camera_id": "RTSP-CORR-03", "external_id": "3", "name": "Corridor Cam 3 \u00b7 Income Tax", "city": "Ahmedabad", "site": "Income Tax circle", "lat": 23.021, "lng": 72.585, "coords_approx": false, "stream_url": "rtsp://mediamtx:8554/stream/plate-demo-3", "protocol": "RTSP (MediaMTX)", "codec": "h264", "delivery": "rtsp", "health_status": "online", "analytics_enabled": true, "make": "Test rig", "model": "MediaMTX", "camera_type": "IP"}]'

@@ -225,7 +225,7 @@ class ANPR:
     def process(self, frame, camera_id):
         masked = mask_overlay(frame)
 
-        # Stage 1 — vehicles, with independent ByteTrack state per camera.
+        # Stage 1 - vehicles, with independent ByteTrack state per camera.
         vres = self.vehicle(masked, verbose=False, conf=VEHICLE_CONF)[0]
         try:
             tracked = self._tracker(camera_id).update(vres.boxes, masked)
@@ -237,7 +237,7 @@ class ANPR:
             return []
         vehicles = parse_bytetrack_rows(tracked, frame, self.vehicle_classes)
 
-        # Stage 2 — plates, associated to the vehicle that contains them
+        # Stage 2 - plates, associated to the vehicle that contains them
         pres = self.plate(
             masked, verbose=False, conf=PLATE_CONF, imgsz=PLATE_IMGSZ
         )[0]

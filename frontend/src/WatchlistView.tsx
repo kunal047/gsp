@@ -138,7 +138,7 @@ export default function WatchlistView() {
                 <td><strong>{item.label}</strong><small>{item.reason}</small></td>
                 <td><span className="category-pill">{title(item.category)}</span></td>
                 <td>{item.kind === "plate" ? <code>{item.plate_norm}</code> : item.kind === "person" ? <span className="roadmap">Face recognition · roadmap</span> : <span className="attribute-rule">{item.color} {item.vehicle_type}</span>} {item.kind !== "person" && <small>≥ {(item.min_confidence * 100).toFixed(0)}% · {item.min_track_hits} observations</small>}</td>
-                <td>{item.case_ref || "—"}</td>
+                <td>{item.case_ref || "-"}</td>
                 <td><span className={`severity-dot ${item.severity}`} />{item.severity}</td>
                 <td><span className={item.kind === "person" ? "status-muted" : "status-live"}>{item.kind === "person" ? "Pending integration" : "Live matching"}</span></td>
                 <td><button className="remove-btn" disabled={!canAct} onClick={() => remove(item)} title="Remove entry">×</button></td>
