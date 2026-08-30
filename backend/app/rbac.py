@@ -27,6 +27,11 @@ from .db import get_db
 ROLES = {"state_admin", "district_officer", "viewer"}
 CAN_ACT = {"state_admin", "district_officer"}
 DEV_AUTH = os.getenv("NETRA_DEV_AUTH") == "1"
+INGEST_PRINCIPALS = {
+    value.strip()
+    for value in os.getenv("NETRA_INGEST_PRINCIPALS", "analytics-service").split(",")
+    if value.strip()
+}
 
 
 @dataclass
@@ -61,6 +66,13 @@ def require_actor(p: Principal = Depends(principal)) -> Principal:
             status_code=403,
             detail=f"role '{p.role}' is read-only and cannot perform this action",
         )
+    return p
+
+
+def require_ingestor(p: Principal = Depends(principal)) -> Principal:
+    """Restrict machine-write endpoints to named internal service identities."""
+    if p.role != "state_admin" or p.user not in INGEST_PRINCIPALS:
+        raise HTTPException(status_code=403, detail="analytics service identity required")
     return p
 
 

@@ -27,9 +27,16 @@ BACKEND_URL = os.getenv("BACKEND_URL", "http://backend:8000").rstrip("/")
 SNAPSHOT_TTL = float(os.getenv("SNAPSHOT_TTL", "6"))
 
 app = FastAPI(title="Netra Stream Gateway")
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "NETRA_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

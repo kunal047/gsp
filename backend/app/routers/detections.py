@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from .. import cache, integrations, models, schemas, storage
 from ..bus import publish_detection
 from ..db import get_db
-from ..rbac import Principal, audit, principal
+from ..rbac import Principal, audit, principal, require_ingestor
 
 router = APIRouter(prefix="/api", tags=["detections"])
 
@@ -102,7 +102,11 @@ def _drop_duplicate_evidence(db: Session, alerts, camera_id: str, digest: str):
 
 
 @router.post("/detections", response_model=schemas.DetectionOut)
-def ingest_detection(d: schemas.DetectionIn, db: Session = Depends(get_db)):
+def ingest_detection(
+    d: schemas.DetectionIn,
+    db: Session = Depends(get_db),
+    _p: Principal = Depends(require_ingestor),
+):
     if d.track_uuid:
         existing = (
             db.query(models.DetectionEvent)
@@ -200,6 +204,7 @@ def detection_evidence(
     detection_id: int,
     payload: dict,
     db: Session = Depends(get_db),
+    _p: Principal = Depends(require_ingestor),
 ):
     """Replace a match crop with its selectively retained context frame."""
     detection = (
@@ -245,7 +250,11 @@ def detection_evidence(
 
 
 @router.post("/frame")
-def frame_summary(payload: dict, db: Session = Depends(get_db)):
+def frame_summary(
+    payload: dict,
+    db: Session = Depends(get_db),
+    _p: Principal = Depends(require_ingestor),
+):
     """Per-frame vehicle count from the worker -> real congestion/surge alerts
     computed from the live feed (no external DB)."""
     cam = cache.get_camera(db, payload.get("camera_id"))
@@ -263,7 +272,11 @@ def frame_summary(payload: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/frame/evidence")
-def frame_evidence(payload: dict, db: Session = Depends(get_db)):
+def frame_evidence(
+    payload: dict,
+    db: Session = Depends(get_db),
+    _p: Principal = Depends(require_ingestor),
+):
     """Attach one selectively retained full frame to traffic alerts.
 
     The worker calls this only after `/frame` reports newly-created alerts, so
@@ -325,9 +338,7 @@ def list_detections(
     if event_type:
         q = q.filter(models.DetectionEvent.event_type == event_type)
     if plate:
-        q = q.filter(
-            models.DetectionEvent.plate_norm.like(f"%{normalize_plate(plate)}%")
-        )
+        q = q.filter(models.DetectionEvent.plate_norm == normalize_plate(plate))
     return q.order_by(models.DetectionEvent.id.desc()).limit(limit).all()
 
 
@@ -347,9 +358,7 @@ def track(
     q = q.filter(models.DetectionEvent.track_uuid.isnot(None))
     mode = None
     if plate:
-        q = q.filter(
-            models.DetectionEvent.plate_norm.like(f"%{normalize_plate(plate)}%")
-        )
+        q = q.filter(models.DetectionEvent.plate_norm == normalize_plate(plate))
         mode = "plate"
     else:
         if vehicle_type:

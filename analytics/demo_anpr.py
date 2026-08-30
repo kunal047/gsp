@@ -29,6 +29,8 @@ from anpr import ANPR
 from tracking import TrackLifecycle
 
 BACKEND = os.getenv("BACKEND_URL", "http://backend:8000")
+BACKEND_TOKEN = os.getenv("BACKEND_TOKEN", "")
+AUTH_HEADERS = {"Authorization": f"Bearer {BACKEND_TOKEN}"} if BACKEND_TOKEN else {}
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
 CANDIDATES = ["GJ01AB1234", "GJ05JT5678", "GJ18CE4021", "GJ27BF7391", "GJ12AK8890"]
 
@@ -69,7 +71,10 @@ def onboard(cam):
         "analytics_enabled": True, "source": "demo-clip",
         "source_system": "Demo clip", "source_adapter": "demo",
     }
-    requests.post(f"{BACKEND}/api/cameras", json=body, timeout=15)
+    response = requests.post(
+        f"{BACKEND}/api/cameras", json=body, headers=AUTH_HEADERS, timeout=15
+    )
+    response.raise_for_status()
 
 
 def post_event(cam, ev, ts):
@@ -91,7 +96,9 @@ def post_event(cam, ev, ts):
         "stopped": ev["stopped"], "wrong_way": ev["wrong_way"],
         "snapshot_b64": base64.b64encode(buf).decode() if ok else None,
     }
-    r = requests.post(f"{BACKEND}/api/detections", json=body, timeout=15)
+    r = requests.post(
+        f"{BACKEND}/api/detections", json=body, headers=AUTH_HEADERS, timeout=15
+    )
     r.raise_for_status()
 
 
@@ -146,8 +153,12 @@ def main():
 
     key = next((v for v in read_by_cam.values() if v), injected)
     time.sleep(1)
-    route = requests.get(f"{BACKEND}/api/track",
-                         params={"plate": key}, timeout=15).json()
+    route_response = requests.get(
+        f"{BACKEND}/api/track", params={"plate": key},
+        headers=AUTH_HEADERS, timeout=15,
+    )
+    route_response.raise_for_status()
+    route = route_response.json()
     stops = route.get("path", [])
 
     os.makedirs("/app/out", exist_ok=True)

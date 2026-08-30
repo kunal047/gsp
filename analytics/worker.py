@@ -23,9 +23,7 @@ from anpr import ANPR  # noqa: E402
 from tracking import TrackLifecycle  # noqa: E402
 
 BACKEND = os.getenv("BACKEND_URL", "http://backend:8000")
-# Service token for the authenticated backend API (registry reads). The
-# detection-ingest endpoints are unauthenticated, but sending the header is
-# harmless there.
+# Service token for every backend registry read and analytics write.
 BACKEND_TOKEN = os.getenv("BACKEND_TOKEN", "")
 AUTH_HEADERS = {"Authorization": f"Bearer {BACKEND_TOKEN}"} if BACKEND_TOKEN else {}
 MAX_STREAMS = int(os.getenv("MAX_STREAMS", "6"))
@@ -113,7 +111,7 @@ def post_detection(cam, det, time_source):
     body["snapshot_b64"] = snap
     try:
         response = requests.post(
-            f"{BACKEND}/api/detections", json=body, timeout=15
+            f"{BACKEND}/api/detections", json=body, headers=AUTH_HEADERS, timeout=15
         )
         response.raise_for_status()
         result = response.json()
@@ -128,6 +126,7 @@ def post_detection(cam, det, time_source):
                         "alert_ids": alert_ids,
                         "snapshot_b64": context,
                     },
+                    headers=AUTH_HEADERS,
                     timeout=15,
                 )
                 evidence_response.raise_for_status()
@@ -369,8 +368,11 @@ def main():
                         "event_ts": event_time.isoformat(),
                         "time_source": time_source,
                     },
+                    headers=AUTH_HEADERS,
                     timeout=10,
-                ).json()
+                )
+                frame_result.raise_for_status()
+                frame_result = frame_result.json()
                 alert_ids = frame_result.get("alert_ids") or []
                 if alert_ids:
                     # Retain a full frame only for an actual traffic alert.
@@ -383,6 +385,7 @@ def main():
                                 "alert_ids": alert_ids,
                                 "snapshot_b64": frame_snap,
                             },
+                            headers=AUTH_HEADERS,
                             timeout=15,
                         )
             except Exception:  # noqa: BLE001

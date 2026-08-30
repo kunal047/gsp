@@ -1,13 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import MapView from "./MapView";
-import VideoWall from "./VideoWall";
-import CameraModal from "./CameraModal";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import DetectionsPanel from "./DetectionsPanel";
-import TrackingView from "./TrackingView";
-import AlertsView from "./AlertsView";
-import OpsView from "./OpsView";
-import WatchlistView from "./WatchlistView";
-import RegistryView from "./RegistryView";
 import {
   fetchCameras,
   fetchStats,
@@ -25,6 +17,15 @@ import {
 } from "./api";
 import Login from "./Login";
 import { STATUS_COLORS, districtColor } from "./theme";
+
+const MapView = lazy(() => import("./MapView"));
+const VideoWall = lazy(() => import("./VideoWall"));
+const CameraModal = lazy(() => import("./CameraModal"));
+const TrackingView = lazy(() => import("./TrackingView"));
+const AlertsView = lazy(() => import("./AlertsView"));
+const OpsView = lazy(() => import("./OpsView"));
+const WatchlistView = lazy(() => import("./WatchlistView"));
+const RegistryView = lazy(() => import("./RegistryView"));
 
 const ROLE_LABELS: Record<string, string> = {
   state_admin: "State Admin",
@@ -99,7 +100,9 @@ export default function App() {
 
   useEffect(() => {
     if (!authed) return;
-    fetchStats().then(setStats).catch((e) => setError(String(e)));
+    fetchStats()
+      .then((value) => { setStats(value); setError(null); })
+      .catch((e) => setError(`Registry summary unavailable: ${String(e)}`));
   }, [rev, authed]);
 
   useEffect(() => {
@@ -108,8 +111,8 @@ export default function App() {
     if (cityFilter) params.city = cityFilter;
     if (statusFilter) params.health_status = statusFilter;
     fetchCameras(params)
-      .then(setCameras)
-      .catch((e) => setError(String(e)));
+      .then((value) => { setCameras(value); setError(null); })
+      .catch((e) => setError(`Camera inventory unavailable: ${String(e)}`));
   }, [cityFilter, statusFilter, rev, authed]);
 
   const cities = useMemo(
@@ -304,6 +307,7 @@ export default function App() {
           )}
         </aside>
 
+        <Suspense fallback={<div className="view-loading">Loading workspace…</div>}>
         {view === "map" ? (
           <div className="map-wrap">
             <MapView cameras={cameras} />
@@ -339,12 +343,15 @@ export default function App() {
         ) : (
           <OpsView />
         )}
+        </Suspense>
 
         <DetectionsPanel onOpenAlerts={() => setView("alerts")} />
       </div>
 
       {selected && (
-        <CameraModal cam={selected} onClose={() => setSelected(null)} />
+        <Suspense fallback={null}>
+          <CameraModal cam={selected} onClose={() => setSelected(null)} />
+        </Suspense>
       )}
     </div>
   );

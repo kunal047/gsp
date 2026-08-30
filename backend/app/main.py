@@ -1,6 +1,7 @@
 import os
+import time
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
@@ -8,24 +9,32 @@ from sqlalchemy import text
 from . import auth, crud, health_monitor, integrations, models, seed_assets
 from .db import Base, SessionLocal, engine
 from .routers import alerts, audit, auth as auth_router, cameras, detections, evidence, reports
+from .rbac import principal, require_actor
 
 app = FastAPI(title="Netra - CCTV Integration Platform API", version="0.1.0")
 
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "NETRA_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.include_router(auth_router.router)
-app.include_router(cameras.router)
-app.include_router(detections.router)
+app.include_router(cameras.router, dependencies=[Depends(principal)])
+app.include_router(detections.router, dependencies=[Depends(principal)])
 app.include_router(evidence.router)
-app.include_router(alerts.router)
-app.include_router(audit.router)
-app.include_router(reports.router)
+app.include_router(alerts.router, dependencies=[Depends(principal)])
+app.include_router(audit.router, dependencies=[Depends(principal)])
+app.include_router(reports.router, dependencies=[Depends(principal)])
 
 SNAP_DIR = os.getenv("SNAPSHOT_DIR", "/snapshots")
 os.makedirs(SNAP_DIR, exist_ok=True)
@@ -39,9 +48,19 @@ INGEST = {"cameras": 0, "error": None, "source": None, "adapters": []}
 
 
 def init_db():
-    with engine.begin() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
-    Base.metadata.create_all(bind=engine)
+    attempts = int(os.getenv("DB_STARTUP_ATTEMPTS", "15"))
+    delay = float(os.getenv("DB_STARTUP_DELAY_SECONDS", "2"))
+    for attempt in range(1, attempts + 1):
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
+            Base.metadata.create_all(bind=engine)
+            return
+        except Exception:  # noqa: BLE001
+            if attempt == attempts:
+                raise
+            print(f"[startup] database unavailable ({attempt}/{attempts}); retrying", flush=True)
+            time.sleep(delay)
 
 
 def ingest_cameras():
@@ -211,7 +230,7 @@ def health():
 
 
 @app.post("/api/ingest/retry")
-def ingest_retry():
+def ingest_retry(_=Depends(require_actor)):
     """Manually re-attempt live onboarding (e.g. after a network blip)."""
     ingest_cameras()
     return health()

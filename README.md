@@ -13,6 +13,14 @@ the internal gateway and analytics services. The service token should carry
 `role=state_admin`, `sub=analytics-service`, and an appropriate expiry. Then run:
 
 ```bash
+openssl rand -hex 32
+NETRA_JWT_SECRET='<the same secret>' python3 scripts/issue_service_token.py
+```
+
+Paste the generated secret and token into `.env`. Before an evaluator sees the
+system, run `NETRA_PASSWORD='<admin password>' python3 scripts/preflight.py`.
+
+```bash
 docker compose up --build
 ```
 

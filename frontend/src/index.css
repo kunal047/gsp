@@ -1529,6 +1529,16 @@ body,
   overflow: hidden;
 }
 
+.view-loading {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  place-items: center;
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
 .sidebar {
   background: var(--panel);
   border-right: 1px solid var(--border);

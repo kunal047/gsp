@@ -35,6 +35,7 @@ services:
       ATTRIBUTE_MIN_CLASS_CONFIDENCE: ${ATTRIBUTE_MIN_CLASS_CONFIDENCE:-0.75}
       HEAVY_VEHICLE_CLASS_CONFIDENCE: ${HEAVY_VEHICLE_CLASS_CONFIDENCE:-0.85}
       NETRA_JWT_SECRET: ${NETRA_JWT_SECRET:?Set NETRA_JWT_SECRET in .env}
+      NETRA_CORS_ORIGINS: ${NETRA_CORS_ORIGINS:-http://localhost:5173}
     volumes:
       - snapshots:/snapshots
       - ./backend/app:/app/app
@@ -49,6 +50,7 @@ services:
       LIVE_BASE: ${LIVE_BASE:-https://live.corp8.cloud}
       BACKEND_URL: http://backend:8000
       BACKEND_TOKEN: ${BACKEND_SERVICE_TOKEN:?Set BACKEND_SERVICE_TOKEN in .env}
+      NETRA_CORS_ORIGINS: ${NETRA_CORS_ORIGINS:-http://localhost:5173}
     depends_on:
       - backend
     ports:
