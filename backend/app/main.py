@@ -55,6 +55,11 @@ def init_db():
             with engine.begin() as conn:
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis"))
             Base.metadata.create_all(bind=engine)
+            # Lightweight additive migrations (create_all does not alter columns).
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE camera_baselines ADD COLUMN IF NOT EXISTS buckets varchar"
+                ))
             return
         except Exception:  # noqa: BLE001
             if attempt == attempts:

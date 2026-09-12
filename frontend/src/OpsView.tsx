@@ -172,14 +172,16 @@ export default function OpsView() {
             <div className="hint">
               Congestion floor {calibration.congestion_floor} · adaptive at
               baseline × {calibration.baseline_factor} once warmed
-              ({calibration.warmup_samples} frames). Baselines are learned live
-              and persist across restarts.
+              ({calibration.warmup_samples} frames). Surge is judged against the
+              current daypart's baseline, so a normal rush hour is not a false
+              spike. Baselines are learned live and persist across restarts.
             </div>
             <table className="ops-table">
               <thead>
                 <tr>
                   <th>Camera</th>
                   <th>Baseline</th>
+                  <th>Now (daypart)</th>
                   <th>Samples</th>
                   <th>Peak</th>
                   <th>Threshold</th>
@@ -187,12 +189,17 @@ export default function OpsView() {
               </thead>
               <tbody>
                 {calibration.cameras.length === 0 && (
-                  <tr><td colSpan={5}><span className="hint">No baselines yet - cameras warming up.</span></td></tr>
+                  <tr><td colSpan={6}><span className="hint">No baselines yet - cameras warming up.</span></td></tr>
                 )}
                 {calibration.cameras.slice(0, 12).map((c) => (
                   <tr key={c.camera_id}>
                     <td>{c.camera_id}</td>
                     <td>{c.baseline.toFixed(1)}</td>
+                    <td>
+                      {c.daypart_baseline.toFixed(1)}
+                      <em style={{ opacity: 0.6 }}> {c.daypart}</em>
+                      {!c.daypart_warmed && <em style={{ color: "#f59e0b" }}> ·</em>}
+                    </td>
                     <td>
                       {c.samples}
                       {!c.warmed && <em style={{ color: "#f59e0b" }}> · warming</em>}

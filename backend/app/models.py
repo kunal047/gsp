@@ -131,7 +131,7 @@ class Alert(Base):
     __tablename__ = "alerts"
 
     id = Column(Integer, primary_key=True)
-    kind = Column(String, index=True)  # congestion | surge | watchlist | feed_offline
+    kind = Column(String, index=True)  # congestion | surge | watchlist | cloned_plate | feed_offline
     watchlist_id = Column(Integer, index=True, nullable=True)
     watchlist_category = Column(String, nullable=True)
     case_ref = Column(String, nullable=True)
@@ -186,6 +186,7 @@ class CameraBaseline(Base):
     sample_count = Column(Integer, nullable=False, default=0)  # frames observed
     peak = Column(Integer, nullable=False, default=0)          # highest count seen
     congestion_threshold = Column(Integer, nullable=True)      # operator override; null = adaptive
+    buckets = Column(String, nullable=True)                    # JSON: per-daypart EMAs (time-of-day)
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

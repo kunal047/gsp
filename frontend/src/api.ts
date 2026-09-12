@@ -458,6 +458,9 @@ export interface CameraBaseline {
   warmed: boolean;
   congestion_threshold: number;
   override: number | null;
+  daypart: string;
+  daypart_baseline: number;
+  daypart_warmed: boolean;
 }
 export interface AlertCalibration {
   warmup_samples: number;
@@ -497,6 +500,14 @@ export interface RoutePoint {
   wrong_way: boolean | null;
 }
 
+export interface Hop {
+  from_camera: string;
+  distance_km: number;
+  gap_seconds: number | null;
+  speed_kmh: number | null;
+  implausible: boolean;
+}
+
 export interface PathStop {
   camera_id: string;
   camera_name: string;
@@ -504,14 +515,19 @@ export interface PathStop {
   source_system: string | null;
   lat: number;
   lng: number;
+  plate?: string | null;
+  plate_norm?: string | null;
   first_seen: string;
   last_seen: string;
   count: number;
   snapshot: string | null;
+  hop: Hop | null;
 }
 
 export interface TrackResult {
   mode: string;
+  match: string | null; // exact | partial | fuzzy | none (plate mode)
+  matched_plates: string[];
   query: Record<string, string | null>;
   count: number;
   cameras: number;

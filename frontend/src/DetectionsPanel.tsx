@@ -14,12 +14,14 @@ import { districtColor } from "./theme";
 
 const ACTIVITY_LABELS: Record<string, string> = {
   watchlist: "Watchlist match",
+  cloned_plate: "Cloned plate?",
   congestion: "Congestion",
   surge: "Traffic surge",
   feed_offline: "Feed offline",
 };
 const ACTIVITY_MARKS: Record<string, string> = {
   watchlist: "WL",
+  cloned_plate: "CP",
   congestion: "CG",
   surge: "TS",
   feed_offline: "FD",

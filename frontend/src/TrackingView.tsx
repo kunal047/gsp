@@ -200,12 +200,14 @@ export default function TrackingView() {
         camera_id: s.camera_id,
         camera_name: s.camera_name,
         city: s.city,
+        source_system: s.source_system,
         lat: s.lat,
         lng: s.lng,
         first_seen: s.ts,
         last_seen: s.ts,
         count: 1,
         snapshot: s.snapshot,
+        hop: null,
       }))
     : result?.path || [];
 
@@ -278,6 +280,18 @@ export default function TrackingView() {
           <div className="track-summary">
             <b>{result.count}</b> detections · <b>{result.cameras}</b> cameras ·{" "}
             <span className="mode">{result.mode} match</span>
+            {result.mode === "plate" && result.match && result.match !== "exact" && (
+              <span
+                className="match-badge"
+                title={
+                  result.match === "fuzzy"
+                    ? "No exact plate; matched a close read (tolerant to an ANPR misread)"
+                    : "Matched a partial plate"
+                }
+              >
+                {result.match} · {result.matched_plates.join(", ")}
+              </span>
+            )}
           </div>
         )}
         {(sv || result) && (
@@ -296,7 +310,7 @@ export default function TrackingView() {
           )}
           {!sv && !result && !note && (
             <div className="hint" style={{ padding: 12 }}>
-              Enter a plate (exact), or pick a vehicle type + colour. With
+              Enter a plate (exact, a partial fragment, or a close read tolerant to an ANPR misread), or pick a vehicle type + colour. With
               <b> Single-vehicle</b> on, one vehicle's most-plausible path is
               reconstructed using spatio-temporal reachability; off gives the
               class-level route (all matching vehicles).
@@ -332,8 +346,9 @@ export default function TrackingView() {
           {result &&
             result.path.map((r, i) => {
               const snap = snapshotUrl(r.snapshot);
+              const multiPlate = (result.matched_plates?.length || 0) > 1;
               return (
-                <div className="tl-row" key={r.camera_id}>
+                <div className="tl-row" key={`${r.plate_norm || ""}-${r.camera_id}-${i}`}>
                   <div className="tl-idx">{i + 1}</div>
                   <div className="tl-thumb">
                     {snap ? (
@@ -349,8 +364,23 @@ export default function TrackingView() {
                         style={{ background: districtColor(r.city) }}
                       />
                       {r.camera_name} · {r.city}
+                      {multiPlate && r.plate && (
+                        <span className="match-badge" style={{ marginLeft: 6 }}>
+                          {r.plate}
+                        </span>
+                      )}
                     </div>
-                    <div className="tl-attr">{r.count} sighting(s)</div>
+                    <div className="tl-attr">
+                      {r.count} sighting(s)
+                      {r.hop && (
+                        <span className={r.hop.implausible ? "hop hop-bad" : "hop"}>
+                          {" · "}
+                          {r.hop.distance_km} km from prev
+                          {r.hop.speed_kmh != null && ` · ${r.hop.speed_kmh} km/h`}
+                          {r.hop.implausible && " · impossible jump"}
+                        </span>
+                      )}
+                    </div>
                     <div className="tl-time">
                       {timeOf(r.first_seen)} → {timeOf(r.last_seen)}
                     </div>

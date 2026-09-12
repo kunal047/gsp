@@ -1843,3 +1843,20 @@ html[data-theme="light"] .evidence-modal { box-shadow: 0 24px 80px var(--shadow)
   cursor: pointer;
 }
 .user-chip .signout:hover { border-color: var(--accent, #4f8cff); color: var(--accent, #4f8cff); }
+
+/* --- Tracking: fuzzy/partial match badge + inter-camera hop metrics --- */
+.match-badge {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  background: rgba(245, 158, 11, 0.16);
+  color: #b45309;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+}
+:root[data-theme="dark"] .match-badge { color: #fbbf24; }
+.hop { color: var(--muted, #7a8aa3); font-size: 11px; }
+.hop-bad { color: #dc2626; font-weight: 700; }

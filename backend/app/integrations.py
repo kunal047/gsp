@@ -12,6 +12,8 @@ The VAHAN / eGujCop / AFIS connectors are intentionally NOT faked here; those
 are real integrations for deployment (documented in the HLD) and cannot be
 queried from this environment.
 """
+import json
+import math
 import os
 from datetime import datetime, timedelta, timezone
 from threading import Lock
@@ -46,22 +48,39 @@ HEAVY_VEHICLE_CLASS_CONFIDENCE = float(
     os.getenv("HEAVY_VEHICLE_CLASS_CONFIDENCE", "0.85")
 )
 
+# Time-of-day dayparts: surge is judged against the SAME daypart's baseline so a
+# normal morning rush is not read as a spike against the flat 24h average.
+DAYPARTS = ["night", "morning", "afternoon", "evening"]  # 0-6, 6-12, 12-18, 18-24
+
+
+def _bucket_of(dt) -> int:
+    return (dt or _now()).hour // 6
+
+
 # Per-camera traffic baseline cache, hydrated from CameraBaseline on startup and
 # persisted back periodically so it survives restarts.
 class _Baseline:
-    __slots__ = ("ema", "count", "peak", "override", "since_persist")
+    __slots__ = ("ema", "count", "peak", "override", "since_persist", "buckets")
 
-    def __init__(self, ema=0.0, count=0, peak=0, override=None):
+    def __init__(self, ema=0.0, count=0, peak=0, override=None, buckets=None):
         self.ema = ema
         self.count = count
         self.peak = peak
         self.override = override          # operator-pinned congestion threshold
         self.since_persist = 0
+        # per-daypart EMAs: {bucket_int: {"ema": float, "count": int}}
+        self.buckets = buckets or {}
 
 
 _baselines: dict[str, _Baseline] = {}
 _dirty: set[str] = set()          # camera_ids with unpersisted baseline changes
 _flush_lock = Lock()
+# Guards mutation/iteration of the baseline state dicts. FastAPI runs the sync
+# ingest endpoints in a threadpool, so process_frame can run concurrently with
+# the background flusher; without this, json.dumps iterating b.buckets while
+# another thread inserts a daypart key raises "dict changed size during
+# iteration". Held only around in-memory dict ops, never across a DB call.
+_state_lock = Lock()
 
 
 def _now():
@@ -72,11 +91,41 @@ def load_baselines(db: Session) -> int:
     """Hydrate the in-memory baselines from the database at startup."""
     _baselines.clear()
     for row in db.query(models.CameraBaseline).all():
+        buckets = {}
+        if getattr(row, "buckets", None):
+            try:
+                buckets = {int(k): v for k, v in json.loads(row.buckets).items()}
+            except (ValueError, TypeError):
+                buckets = {}
         _baselines[row.camera_id] = _Baseline(
             ema=row.ema, count=row.sample_count, peak=row.peak,
-            override=row.congestion_threshold,
+            override=row.congestion_threshold, buckets=buckets,
         )
     return len(_baselines)
+
+
+def _snapshot_row(b: _Baseline) -> dict:
+    """Consistent, serialized copy of a baseline's persistable fields, taken under
+    the state lock so the daypart dict is never read mid-mutation."""
+    with _state_lock:
+        return {
+            "ema": round(b.ema, 3),
+            "sample_count": b.count,
+            "peak": b.peak,
+            "congestion_threshold": b.override,
+            "buckets": (
+                json.dumps({str(k): v for k, v in b.buckets.items()})
+                if b.buckets else None
+            ),
+        }
+
+
+def _apply_row(row: models.CameraBaseline, snap: dict):
+    row.ema = snap["ema"]
+    row.sample_count = snap["sample_count"]
+    row.peak = snap["peak"]
+    row.congestion_threshold = snap["congestion_threshold"]
+    row.buckets = snap["buckets"]
 
 
 def _persist_baseline(db: Session, cid: str, b: _Baseline):
@@ -88,10 +137,7 @@ def _persist_baseline(db: Session, cid: str, b: _Baseline):
     if row is None:
         row = models.CameraBaseline(camera_id=cid)
         db.add(row)
-    row.ema = round(b.ema, 3)
-    row.sample_count = b.count
-    row.peak = b.peak
-    row.congestion_threshold = b.override
+    _apply_row(row, _snapshot_row(b))
     db.commit()
 
 
@@ -111,7 +157,10 @@ def congestion_threshold(cid: str) -> int:
 def baseline_snapshot() -> list[dict]:
     """Current calibration state, for the ops/alerts API."""
     out = []
-    for cid, b in _baselines.items():
+    now_bucket = _bucket_of(None)
+    for cid, b in list(_baselines.items()):
+        with _state_lock:
+            bstate = dict(b.buckets.get(now_bucket) or {})
         out.append({
             "camera_id": cid,
             "baseline": round(b.ema, 1),
@@ -120,6 +169,9 @@ def baseline_snapshot() -> list[dict]:
             "warmed": b.count >= WARMUP_SAMPLES,
             "congestion_threshold": congestion_threshold(cid),
             "override": b.override,
+            "daypart": DAYPARTS[now_bucket],
+            "daypart_baseline": round(bstate.get("ema", 0.0), 1),
+            "daypart_warmed": bstate.get("count", 0) >= WARMUP_SAMPLES,
         })
     return sorted(out, key=lambda r: r["camera_id"])
 
@@ -222,26 +274,44 @@ def process_frame(
         if a:
             created.append(a)
 
-    # Surge = a real spike above the learned baseline. Held off until the camera
-    # is warmed so a freshly-loaded baseline can't trigger a phantom surge.
-    if warmed and prev is not None and vehicle_count >= max(
-        SURGE_FLOOR, SURGE_FACTOR * prev
-    ):
+    # Surge = a real spike above the learned baseline. Judged against the SAME
+    # daypart's baseline once that daypart is warm (so a normal morning rush is
+    # not a spike vs the flat 24h average); falls back to the overall baseline.
+    bucket = _bucket_of(event_ts)
+    with _state_lock:
+        bstate = b.buckets.get(bucket)
+        bucket_ema = bstate["ema"] if bstate else 0.0
+        bucket_count = bstate["count"] if bstate else 0
+    if bucket_count >= WARMUP_SAMPLES:
+        surge_base, surge_label = bucket_ema, f"{DAYPARTS[bucket]} baseline"
+    elif warmed and prev is not None:
+        surge_base, surge_label = prev, "baseline"
+    else:
+        surge_base, surge_label = None, None
+    if surge_base is not None and vehicle_count >= max(SURGE_FLOOR, SURGE_FACTOR * surge_base):
         a = _raise(
             db, "surge", camera,
-            f"Traffic surge - {vehicle_count} vehicles (baseline ~{prev:.0f})",
+            f"Traffic surge - {vehicle_count} vehicles ({surge_label} ~{surge_base:.0f})",
             "medium", count=vehicle_count, event_ts=event_ts, time_source=time_source,
         )
         if a:
             created.append(a)
 
-    # Update the baseline in memory and mark it dirty. Persistence is batched by
-    # a background flusher (flush_dirty) so the hot ingest path does NO DB writes.
-    b.ema = float(vehicle_count) if prev is None else (
-        EMA_ALPHA * vehicle_count + (1 - EMA_ALPHA) * b.ema
-    )
-    b.count += 1
-    b.peak = max(b.peak, vehicle_count)
+    # Update the overall + daypart baselines in memory and mark dirty. Persistence
+    # is batched by a background flusher so the hot ingest path does NO DB writes.
+    # Mutations are under _state_lock so a concurrent flush never iterates a dict
+    # that is being resized.
+    with _state_lock:
+        b.ema = float(vehicle_count) if prev is None else (
+            EMA_ALPHA * vehicle_count + (1 - EMA_ALPHA) * b.ema
+        )
+        b.count += 1
+        b.peak = max(b.peak, vehicle_count)
+        bstate = b.buckets.setdefault(bucket, {"ema": 0.0, "count": 0})
+        bstate["ema"] = float(vehicle_count) if bstate["count"] == 0 else (
+            EMA_ALPHA * vehicle_count + (1 - EMA_ALPHA) * bstate["ema"]
+        )
+        bstate["count"] += 1
     _dirty.add(cid)
     return created
 
@@ -267,10 +337,7 @@ def flush_dirty(db: Session) -> int:
             if row is None:
                 row = models.CameraBaseline(camera_id=cid)
                 db.add(row)
-            row.ema = round(b.ema, 3)
-            row.sample_count = b.count
-            row.peak = b.peak
-            row.congestion_threshold = b.override
+            _apply_row(row, _snapshot_row(b))
         db.commit()
         return len(cids)
     except Exception as exc:  # noqa: BLE001
@@ -371,6 +438,119 @@ def _wl_matches(item: models.Watchlist, det: models.DetectionEvent):
             )
             return "attribute", confidence
     return None  # person entries match via face recognition (roadmap)
+
+
+# --- Cloned / duplicate-plate detection (impossible movement) --------------
+# The same plate seen at two cameras too far apart to reach in the elapsed time
+# is physically impossible: either a serious ANPR misread or a cloned/duplicate
+# plate. This is a real-time federation check across ALL source systems.
+CLONE_MAX_SPEED_KMH = float(os.getenv("CLONE_MAX_SPEED_KMH", "150"))
+CLONE_MIN_GAP_S = int(os.getenv("CLONE_MIN_GAP_S", "20"))
+CLONE_MIN_KM = float(os.getenv("CLONE_MIN_KM", "0.5"))
+CLONE_LOOKBACK_S = int(os.getenv("CLONE_LOOKBACK_S", "3600"))
+# Controlled test rigs publish one looping clip on several "cameras", so the same
+# plate appears at multiple locations by construction - meaningless for a
+# cross-camera speed check. Exclude those source systems; real feeds are checked.
+CLONE_EXCLUDE_SYSTEMS = {
+    s for s in os.getenv("CLONE_EXCLUDE_SOURCE_SYSTEMS", "Independent RTSP System").split("|") if s
+}
+
+
+def _haversine_km(a_lat, a_lng, b_lat, b_lng):
+    dlat = math.radians(b_lat - a_lat)
+    dlng = math.radians(b_lng - a_lng)
+    h = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(a_lat)) * math.cos(math.radians(b_lat))
+        * math.sin(dlng / 2) ** 2
+    )
+    return 2 * 6371.0 * math.asin(math.sqrt(h))
+
+
+def check_impossible_movement(db: Session, ev: models.DetectionEvent):
+    """Raise a cloned-plate alert if this plate was just read at a DIFFERENT
+    camera too far away to have been reached in the elapsed time."""
+    if (
+        ev.event_type != "anpr"
+        or not ev.plate_norm
+        or ev.lat is None
+        or ev.lng is None
+        or ev.ts is None
+        or ev.source_system in CLONE_EXCLUDE_SYSTEMS
+    ):
+        return None
+    prior = (
+        db.query(models.DetectionEvent)
+        .filter(
+            models.DetectionEvent.plate_norm == ev.plate_norm,
+            models.DetectionEvent.camera_id != ev.camera_id,
+            models.DetectionEvent.id != ev.id,
+            models.DetectionEvent.lat.isnot(None),
+            models.DetectionEvent.ts >= ev.ts - timedelta(seconds=CLONE_LOOKBACK_S),
+            models.DetectionEvent.ts <= ev.ts,
+        )
+        .order_by(models.DetectionEvent.ts.desc())
+        .first()
+    )
+    if (
+        not prior
+        or prior.lat is None
+        or prior.ts is None
+        or prior.source_system in CLONE_EXCLUDE_SYSTEMS
+    ):
+        return None
+    gap = abs((ev.ts - prior.ts).total_seconds())
+    if gap < CLONE_MIN_GAP_S:
+        return None  # near-simultaneous: clock skew / overlapping FOV, ambiguous
+    dist = _haversine_km(prior.lat, prior.lng, ev.lat, ev.lng)
+    if dist < CLONE_MIN_KM:
+        return None
+    speed = dist / (gap / 3600.0)
+    if speed <= CLONE_MAX_SPEED_KMH:
+        return None
+    # Throttle per PLATE at this camera, not camera-wide: two different cloned
+    # plates hitting the same busy ANPR camera must both alert.
+    recent_clone = (
+        db.query(models.Alert)
+        .filter(
+            models.Alert.kind == "cloned_plate",
+            models.Alert.camera_id == ev.camera_id,
+            models.Alert.plate == ev.plate,
+            models.Alert.ingested_at >= _now() - timedelta(seconds=THROTTLE_SECONDS),
+        )
+        .first()
+    )
+    if recent_clone is not None:
+        return None
+    cross = prior.source_system != ev.source_system
+    reason = (
+        f"Plate {ev.plate} at {prior.camera_name} then {ev.camera_name} - "
+        f"{dist:.1f} km in {gap:.0f}s (~{speed:.0f} km/h), physically impossible - "
+        f"possible cloned/duplicate plate" + (" (across systems)" if cross else "")
+    )
+    alert = models.Alert(
+        kind="cloned_plate",
+        detection_id=ev.id,
+        camera_id=ev.camera_id,
+        camera_name=ev.camera_name,
+        city=ev.city,
+        source_system=ev.source_system,
+        lat=ev.lat,
+        lng=ev.lng,
+        plate=ev.plate,
+        vehicle_type=ev.vehicle_type,
+        color=ev.color,
+        reason=reason,
+        source="Federation Analytics",
+        severity="high",
+        snapshot=ev.snapshot,
+        ts=ev.ts,
+        time_source=ev.time_source,
+    )
+    db.add(alert)
+    db.commit()
+    db.refresh(alert)
+    return alert
 
 
 def check_watchlist(db: Session, det: models.DetectionEvent):

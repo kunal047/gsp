@@ -192,6 +192,10 @@ def ingest_detection(
     )
     # Operator watchlist (BOLO) match -> real-time alert
     matches = integrations.check_watchlist(db, ev)
+    # Cloned/duplicate-plate detection: same plate, two cameras, impossible speed.
+    clone = integrations.check_impossible_movement(db, ev)
+    if clone:
+        matches = matches + [clone]
     # The worker uses these IDs to upload the full contextual frame only when
     # a match occurred. Pydantic reads this transient attribute into the API
     # response; it is intentionally not a database column.
@@ -342,6 +346,58 @@ def list_detections(
     return q.order_by(models.DetectionEvent.id.desc()).limit(limit).all()
 
 
+PLATE_FUZZ = int(os.getenv("TRACK_PLATE_FUZZ", "1"))
+
+
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a or not b:
+        return len(a) or len(b)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _resolve_plate_matches(db, query_plate):
+    """Find stored plates matching an operator's query, tolerant to ANPR error
+    and partial input. Returns (matched_norms, match_type):
+
+      exact   - stored verbatim
+      partial - the query is a fragment of a stored plate, or vice-versa (an
+                operator recalls only part of a number)
+      fuzzy   - within PLATE_FUZZ edits (an OCR misread such as B<->8, O<->0)
+    """
+    norm = normalize_plate(query_plate)
+    if not norm:
+        return set(), "none"
+    distinct = [
+        row[0]
+        for row in db.query(models.DetectionEvent.plate_norm)
+        .filter(models.DetectionEvent.plate_norm.isnot(None))
+        .distinct()
+        .all()
+    ]
+    if norm in distinct:
+        return {norm}, "exact"
+    partial = {pn for pn in distinct if norm in pn or (len(norm) >= 4 and pn in norm)}
+    if partial:
+        return partial, "partial"
+    fuzzy = {
+        pn
+        for pn in distinct
+        if abs(len(pn) - len(norm)) <= PLATE_FUZZ
+        and _levenshtein(pn, norm) <= PLATE_FUZZ
+    }
+    if fuzzy:
+        return fuzzy, "fuzzy"
+    return set(), "none"
+
+
 @router.get("/track")
 def track(
     plate: Optional[str] = None,
@@ -357,8 +413,18 @@ def track(
     q = db.query(models.DetectionEvent)
     q = q.filter(models.DetectionEvent.track_uuid.isnot(None))
     mode = None
+    match_type = None
+    matched_plates: list[str] = []
     if plate:
-        q = q.filter(models.DetectionEvent.plate_norm == normalize_plate(plate))
+        matched, match_type = _resolve_plate_matches(db, plate)
+        matched_plates = sorted(matched)
+        # Fall back to the exact (empty) filter if nothing matched, so the query
+        # returns a clean empty route rather than everything.
+        q = q.filter(
+            models.DetectionEvent.plate_norm.in_(matched)
+            if matched
+            else models.DetectionEvent.plate_norm == normalize_plate(plate)
+        )
         mode = "plate"
     else:
         if vehicle_type:
@@ -381,6 +447,7 @@ def track(
             "lng": r.lng,
             "ts": r.ts,
             "plate": r.plate,
+            "plate_norm": r.plate_norm,
             "vehicle_type": r.vehicle_type,
             "color": r.color,
             "snapshot": r.snapshot,
@@ -402,19 +469,26 @@ def track(
         if r.lat is not None and r.lng is not None
     ]
     # Aggregate into a clean path: each camera once, ordered by first sighting,
-    # with a sighting count and first/last-seen window.
+    # with a sighting count and first/last-seen window. When a fuzzy/partial plate
+    # query resolves to MORE THAN ONE plate, the resolved plates are different
+    # vehicles, so aggregate per (plate, camera) and keep each plate's trajectory
+    # separate - otherwise the timeline would splice two vehicles into one route.
+    multi_plate = mode == "plate" and len(matched_plates) > 1
     agg: dict = {}
     for r in route:
-        cid = r["camera_id"]
-        a = agg.get(cid)
+        pnorm = r["plate_norm"]
+        key = (pnorm, r["camera_id"]) if multi_plate else r["camera_id"]
+        a = agg.get(key)
         if a is None:
-            agg[cid] = {
-                "camera_id": cid,
+            agg[key] = {
+                "camera_id": r["camera_id"],
                 "camera_name": r["camera_name"],
                 "city": r["city"],
                 "source_system": r["source_system"],
                 "lat": r["lat"],
                 "lng": r["lng"],
+                "plate": r["plate"],
+                "plate_norm": pnorm,
                 "first_seen": r["ts"],
                 "last_seen": r["ts"],
                 "count": 1,
@@ -425,17 +499,46 @@ def track(
             a["count"] += 1
             if r["snapshot"] and not a["snapshot"]:
                 a["snapshot"] = r["snapshot"]
-    path = sorted(agg.values(), key=lambda x: x["first_seen"])
+    if multi_plate:
+        # Group by plate, then order by first sighting within that plate.
+        path = sorted(agg.values(), key=lambda x: (x["plate_norm"] or "", x["first_seen"]))
+    else:
+        path = sorted(agg.values(), key=lambda x: x["first_seen"])
+
+    # Inter-camera hop metrics turn the path into an investigative timeline:
+    # distance, elapsed time and implied speed between consecutive sightings,
+    # flagging physically impossible jumps (a likely misread or cloned plate).
+    # A hop is only drawn between two sightings of the SAME vehicle, so it is
+    # suppressed at the start and across a plate boundary in multi-plate results.
+    for i, stop in enumerate(path):
+        prev = path[i - 1] if i > 0 else None
+        if prev is None or (multi_plate and stop["plate_norm"] != prev["plate_norm"]):
+            stop["hop"] = None
+            continue
+        dist = round(_haversine_km(prev["lat"], prev["lng"], stop["lat"], stop["lng"]), 2)
+        gap = None
+        if stop["first_seen"] and prev["last_seen"]:
+            gap = max(0.0, (stop["first_seen"] - prev["last_seen"]).total_seconds())
+        speed = round(dist / (gap / 3600.0), 1) if gap and gap > 0 else None
+        stop["hop"] = {
+            "from_camera": prev["camera_name"],
+            "distance_km": dist,
+            "gap_seconds": round(gap) if gap is not None else None,
+            "speed_kmh": speed,
+            "implausible": bool(speed is not None and speed > IMPLAUSIBLE_SPEED_KMH),
+        }
 
     q = {"plate": plate, "vehicle_type": vehicle_type, "color": color}
     audit(
         db,
         p,
         "vehicle.track",
-        f"{mode} match {q} -> {len(route)} sightings / {len(agg)} cameras",
+        f"{mode}:{match_type or '-'} match {q} -> {len(route)} sightings / {len(agg)} cameras",
     )
     return {
         "mode": mode,
+        "match": match_type,
+        "matched_plates": matched_plates,
         "query": q,
         "count": len(route),
         "cameras": len(agg),
@@ -443,6 +546,12 @@ def track(
         "path": path,
     }
 
+
+# Speed above which an inter-camera hop is flagged "impossible" in the /track
+# timeline. Deliberately the SAME threshold the cloned-plate alert uses
+# (CLONE_MAX_SPEED_KMH) so the timeline and the alert engine agree; distinct from
+# the tracker's reachability gate below, which is a tighter same-vehicle test.
+IMPLAUSIBLE_SPEED_KMH = float(os.getenv("CLONE_MAX_SPEED_KMH", "150"))
 
 # --- Space-time single-vehicle tracker ------------------------------------
 MAX_SPEED_KMH = float(os.getenv("TRACK_MAX_SPEED", "80"))  # can't teleport
