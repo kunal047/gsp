@@ -108,7 +108,7 @@ function foot(s, n, dark) {
   // proof band
   card(s, M, 4.55, W - 2 * M, 1.7, INK2);
   s.addText("PROVEN LIVE", { isTextBox: true, x: M + 0.45, y: 4.8, w: 3, h: 0.3, margin: 0, fontFace: BF, fontSize: 12, bold: true, color: TEAL, charSpacing: 2 });
-  const proof = [["GJ01AB1234", "vehicle of interest"], ["3", "cameras on the route"], ["300", "correlated sightings"], ["live RTSP", "not a recording"]];
+  const proof = [["GJ01AB1234", "vehicle of interest"], ["3", "cameras on the route"], ["200+", "correlated sightings"], ["live RTSP", "not a recording"]];
   const pw = (W - 2 * M - 0.9) / 4;
   proof.forEach(([n, l], i) => {
     const x = M + 0.45 + i * pw;
@@ -201,7 +201,7 @@ function arrow(s, x, y) {
   });
   const feats = [
     ["Live onboarding", "Real government feed via a typed adapter; coordinates geocoded and flagged, category inferred - nothing faked."],
-    ["Asset lifecycle", "Make, model, install date, AMC and EOL per camera - 17 maintenance-due and 12 end-of-life surfaced automatically."],
+    ["Asset lifecycle", "Make, model, install date, AMC and EOL per camera; maintenance-due and end-of-life items are surfaced automatically."],
     ["Coverage & gap analysis", "Per-district coverage, thin-coverage and offline lists; downloadable gap report for planning."],
   ];
   const cw = (W - 2 * M - 2 * 0.4) / 3;
@@ -232,7 +232,7 @@ function arrow(s, x, y) {
   const pts = [
     ["Consensus gating", "A plate is stored only after ≥3 corroborating reads pass a format check - low-confidence guesses are rejected, not saved."],
     ["Evidence-backed", "100% of stored events carry a decoded evidence frame; metadata-only detections never enter the operational timeline."],
-    ["Search & correlate", "Searchable plate + camera-wise indexing feed cross-camera route reconstruction and boxed watchlist (BOLO) alerts."],
+    ["Search & correlate", "Tolerant plate search (OCR-error aware) drives cross-camera routes, watchlist (BOLO) matches, and cloned-plate detection across systems."],
   ];
   const cw = (W - 2 * M - 2 * 0.4) / 3;
   pts.forEach(([h, b], i) => {
@@ -343,7 +343,7 @@ function arrow(s, x, y) {
   const facts = [
     ["164 feeds / process", "One backend now sustains ~164 feeds at 5 fps - 3.3× the 50-feed target, 0 errors. Replicas scale it linearly."],
     ["Analytics is GPU work", "Full ANPR is ~5 s/frame on CPU - confirming the design: edge/regional GPU pools (~40 cams/GPU), not a central CPU farm."],
-    ["Bus is never the bottleneck", "Statewide event load (40–200k/s) is ~0.3% of the video data; a small Redpanda cluster clears it with headroom."],
+    ["Bus is never the bottleneck", "Statewide event load (40-200k/s) is ~0.3% of the video data; a small Redpanda cluster clears it with headroom."],
   ];
   let y = 2.15;
   facts.forEach(([h, b]) => {
