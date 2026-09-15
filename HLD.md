@@ -320,7 +320,7 @@ To onboard each department we need (to be collected via a standard intake form):
 | Secure | RBAC + audit built; mTLS/segmentation/encryption designed |
 | Scalable | event-driven, hierarchical edge→regional→state ([SCALABILITY.md](SCALABILITY.md)) |
 
-### 19.3 Honest limitations (documented, not masked)
+### 19.3 Limitations
 - **ANPR plate reads** are near-zero on the current wide-angle overview cameras (plates below OCR resolution) - a source-camera limit; pipeline is ready for ANPR-grade feeds.
 - **Single-vehicle tracking** without a plate is built via space-time gating (§9); a **visual re-ID** refinement (to separate identical-looking, space-time-feasible vehicles) is the next increment.
 - **Coordinates** are geocoded/approximate (source API has no lat/lng), flagged `coords_approx`.
@@ -328,4 +328,4 @@ To onboard each department we need (to be collected via a standard intake form):
 
 ---
 
-*Companion docs: [PLAN.md](PLAN.md) (master plan), [SCALABILITY.md](SCALABILITY.md) (80k-camera sizing). Sections tagged **[built]** are implemented in the running prototype; **[design]/[framework-ready]/[roadmap]** are specified for deployment.*
+*Open source - full code, infrastructure and documentation: [github.com/kunal047/gsp](https://github.com/kunal047/gsp)*
