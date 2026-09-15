@@ -210,7 +210,43 @@ Three tiers - **Edge (site) → Regional (district/police range) → State Core 
 
 ## 14. Scalability to ~80,000 cameras
 
-Summarized headline: video would be ~200 Gbps / ~32 PB centralized → kept regional; events ~1.6 Gbps peak / ~100 TB (30 d) → ~0.3% of data; ~600–1,000 distributed accelerators; core event bus at ~5–10% utilization. Model, tiers, storage tiers, HA/DR, and phased rollout: **[SCALABILITY.md](SCALABILITY.md)** (evaluation area #35).
+**The thesis, forced by arithmetic.** At 80,000 cameras and a blended 2.5 Mbps stream, centralizing video would be ~200 Gbps of sustained ingest and ~32 PB at 15-day retention - infeasible and pointless. The events extracted from that video are ~0.3% of the data. So video stays at the edge/region and only compact events plus on-demand streams cross the WAN. This one decision answers heterogeneity, geographic dispersion, and scale together.
+
+### 14.1 Capacity model
+| Dimension | Centralized (naive) | Netra (event-driven) |
+|---|---|---|
+| Video bandwidth | ~200 Gbps into one core | kept regional; ~1.6 Gbps peak of events cross the WAN |
+| Storage (15 d) | ~32 PB central | ~13-19 PB tiered, regional (H.265 + event-based recording) |
+| Event store (30 d) | not applicable | ~100 TB indexed, about 0.3% of the video |
+| Analytics compute | ~2,000 central GPUs | ~600-1,000 edge/regional accelerators |
+| Event bus load | not applicable | ~40k/s average, ~150-200k/s peak = ~5-10% of a modest cluster |
+
+### 14.2 Hierarchical topology (edge to regional to state)
+- **Edge (per site):** existing camera + NVR/VMS untouched, plus an edge analytics node (Jetson/GPU) running ANPR/detection at source; publishes events over MQTT and buffers on flaky links.
+- **Regional (per district / police range, ~6 ranges across 33 districts):** VMS federation gateway (adapters), tiered hot/warm storage, a regional GPU pool, MQTT broker + Redpanda cluster; keeps video local and forwards filtered events upward.
+- **State core (State Data Center, Gandhinagar + DR):** global registry + PostGIS, global event store + search index, cross-region route reconstruction, and external DB integration (VAHAN / SARTHI / eGujCop / AFIS / NAFIS). It sees events, metadata, and on-demand streams, never bulk video.
+
+Messaging is two-tier: MQTT from edge to regional, Redpanda (Kafka API, RF=3, partitioned by region and camera-group) at regional and state core. The prototype runs Redis Streams behind the same producer/consumer interface, so no application code changes between prototype and production.
+
+### 14.3 Storage tiers (retention-driven)
+| Tier | Window | Media | Location |
+|---|---|---|---|
+| Hot | 0-48 h | NVMe | Regional |
+| Warm | 2-15 d | HDD / object store | Regional |
+| Cold / archive | >15 d (policy) | Erasure-coded object / archive | Regional or state DR |
+| Events & metadata | 30-90 d+ | Indexed store | State core (kept far longer; cheap) |
+
+### 14.4 Measured on the prototype (not only modelled)
+A 50-feed ingestion benchmark on a single backend process took throughput from **15 to 820 req/s (~55x)** after two fixes - an in-process camera-metadata cache and background-batched baseline persistence - sustaining **~164 feeds at 5 fps with 0 errors**, about 3.3x the 50-feed target. Full ANPR on CPU is ~5 s/frame, which is exactly why analytics is designed for edge/regional GPU pools (~40 cameras per GPU) rather than a central CPU farm. Ingestion scales linearly with backend replicas.
+
+### 14.5 Phased rollout
+1. **Pilot** - 2-3 districts, ~2,000 cameras, one regional hub; validate onboarding, ANPR, cross-camera tracking and HA.
+2. **Range expansion** - scale to a full police range; tune GPU-to-bandwidth ratios against real load.
+3. **Statewide** - replicate the regional template across all ranges; connect DB integrations; run DR cutover drills.
+4. **Private-camera onboarding** - societies and malls, viewing-only and consent-gated, where permitted.
+
+### 14.6 Indicative cost envelope
+Planning ranges only, with the existing camera estate reused and to be replaced by discovered inventory plus RFP pricing before procurement: statewide capital **₹360-840 crore**, annual operating **₹55-140 crore/year**; pilot gate **₹10-18 crore capital** and **₹2-4 crore/year** for ~2,000 cameras. Full capacity model, messaging-tier sizing and HA/DR detail: **[SCALABILITY.md](SCALABILITY.md)** (evaluation area #35).
 
 ## 15. Department-level technical requirements (integration feasibility)
 
